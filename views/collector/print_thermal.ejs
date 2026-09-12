@@ -1,9 +1,71 @@
+<%
+  const pad4 = (n) => String(n).padStart(4, '0');
+  const invNo = '#INV-' + pad4(invoice.id);
+  const amtRaw = invoice.amount != null ? invoice.amount : (customer.package_price != null ? customer.package_price : 0);
+  const amtText = 'Rp ' + parseInt(amtRaw || 0).toLocaleString('id-ID');
+  const isPaid = String(invoice.status || '').toLowerCase() === 'paid';
+  const paidAtText = invoice.paid_at ? formatDateLocal(invoice.paid_at) : formatDateLocal(getNowLocal());
+  const companyName = settings.company_name || settings.company_header || company || 'INTERNET SERVICE';
+  const companyAddress = settings.company_address || '';
+  const companyPhone = settings.company_phone || '';
+  const packageName = invoice.package_name || customer.package_name || 'Internet Broadband';
+  const periodText = String(invoice.period_month).padStart(2, '0') + '/' + invoice.period_year;
+  const petugas = collectorName || 'Kasir / Admin';
+
+  // Satu sumber data untuk pratinjau HTML sekaligus untuk byte ESC/POS,
+  // supaya tampilan di layar dan hasil cetak thermal tidak pernah beda.
+  const sectionTrx = [
+    { label: 'No. Faktur', value: invNo },
+    { label: 'Waktu', value: paidAtText },
+    { label: 'Petugas', value: petugas }
+  ];
+
+  const sectionCust = [
+    { label: 'ID Pelanggan', value: '#' + customer.id },
+    { label: 'Nama', value: customer.name || '-' }
+  ];
+  if (customer.phone) sectionCust.push({ label: 'No. HP', value: customer.phone });
+  if (customer.pppoe_username) sectionCust.push({ label: 'PPPoE', value: customer.pppoe_username });
+  sectionCust.push({ label: 'Paket', value: packageName });
+  sectionCust.push({ label: 'Periode', value: periodText });
+
+  const receipt = {
+    logoUrl: '/img/logo.png',
+    company: { name: companyName, address: companyAddress, phone: companyPhone },
+    title: 'STRUK BUKTI PEMBAYARAN',
+    sections: [sectionTrx, sectionCust],
+    total: {
+      label: 'TOTAL PEMBAYARAN',
+      value: amtText,
+      status: isPaid ? '*** LUNAS ***' : '** BELUM LUNAS **'
+    },
+    footer: [
+      'Simpan struk ini sebagai bukti pembayaran yang sah.',
+      'Terima Kasih atas Pembayaran Anda!'
+    ],
+    filename: 'Struk-INV-' + pad4(invoice.id) + '.prn',
+    // Payload untuk jembatan WebView di APK (AndroidBluetoothBridge.printInvoice)
+    bridge: {
+      companyName: companyName,
+      companyAddress: companyAddress,
+      companyPhone: companyPhone,
+      invoiceNumber: invNo,
+      customerName: customer.name || '-',
+      packageName: packageName,
+      period: periodText,
+      amountFormatted: amtText,
+      collectorName: petugas,
+      paymentDate: paidAtText
+    }
+  };
+%>
 <!DOCTYPE html>
 <html lang="id">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Struk Thermal #INV-<%= String(invoice.id).padStart(4, '0') %></title>
+  <title>Struk Thermal <%= invNo %></title>
+  <script src="/js/escpos-rawbt.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -26,6 +88,8 @@
       box-shadow: 0 4px 15px rgba(0,0,0,0.15);
       border-radius: 4px;
       transition: width 0.2s;
+      /* Seluruh isi struk rata tengah, sama seperti output ESC/POS. */
+      text-align: center;
     }
 
     .ticket.size-80mm {
@@ -34,24 +98,34 @@
       padding: 16px 12px;
     }
 
-    .text-center { text-align: center; }
-    .text-end { text-align: right; }
+    .logo {
+      display: block;
+      margin: 0 auto 6px;
+      max-width: 80%;
+      max-height: 58px;
+      object-fit: contain;
+      /* Pratinjau dibuat abu-abu supaya mirip hasil cetak thermal 1-bit. */
+      filter: grayscale(1) contrast(1.35);
+    }
+    .size-80mm .logo { max-height: 72px; }
+
     .fw-bold { font-weight: bold; }
-    .title { font-size: 14px; font-weight: bold; text-transform: uppercase; margin-bottom: 2px; }
+    .title { font-size: 15px; font-weight: bold; text-transform: uppercase; margin-bottom: 2px; letter-spacing: .02em; }
     .subtitle { font-size: 10px; margin-bottom: 3px; color: #222; }
+    .size-80mm .subtitle { font-size: 11px; }
     .divider { border-top: 1px dashed #000000; margin: 6px 0; }
-    .row-item { display: flex; justify-content: space-between; margin-bottom: 3px; font-size: 11px; }
-    .size-80mm .row-item { font-size: 12.5px; }
-    .row-item .label { color: #333; }
-    .row-item .val { font-weight: bold; text-align: right; word-break: break-word; }
-    
+
+    .rowline { font-size: 11px; margin-bottom: 3px; word-break: break-word; }
+    .size-80mm .rowline { font-size: 12.5px; }
+    .rowline .lbl { color: #333; }
+    .rowline .val { font-weight: bold; }
+
     .total-box {
       border: 1.5px dashed #000000;
       padding: 8px 4px;
       margin: 8px 0;
-      text-align: center;
     }
-    .total-amount { font-size: 16px; font-weight: bold; margin-top: 2px; }
+    .total-amount { font-size: 18px; font-weight: bold; margin-top: 2px; letter-spacing: .02em; }
     .badge-status {
       display: inline-block;
       padding: 2px 10px;
@@ -62,77 +136,97 @@
       background: #ffffff;
     }
 
-    .no-print {
-      margin-top: 16px;
-      text-align: center;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      align-items: center;
-      justify-content: center;
-    }
-
-    .btn-group-size {
-      display: flex;
-      gap: 6px;
-      margin-bottom: 4px;
-    }
-
-    .btn-size {
+    /* ── Panel kontrol (tidak ikut tercetak) ───────────────────────────── */
+    .panel {
+      width: 58mm;
+      max-width: 100%;
+      margin: 14px auto 0;
       background: #ffffff;
-      border: 1px solid #94a3b8;
-      padding: 4px 10px;
-      border-radius: 6px;
+      border-radius: 12px;
+      padding: 12px 10px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.12);
+      text-align: center;
+      font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    }
+    .panel.size-80mm { width: 80mm; }
+
+    .panel-label {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: #64748b;
+      margin-bottom: 5px;
+    }
+
+    .opt-row { display: flex; gap: 6px; justify-content: center; margin-bottom: 10px; }
+
+    .btn-opt {
+      flex: 1;
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      padding: 6px 8px;
+      border-radius: 8px;
       font-size: 11px;
       cursor: pointer;
       font-weight: 600;
+      color: #0f172a;
     }
+    .btn-opt.active { background: #0f172a; color: #ffffff; border-color: #0f172a; }
 
-    .btn-size.active {
-      background: #0f172a;
+    .btn {
+      display: block;
+      width: 100%;
+      border: none;
+      padding: 11px 14px;
+      border-radius: 10px;
+      font-weight: 700;
+      cursor: pointer;
+      font-size: 13px;
+      margin-bottom: 8px;
       color: #ffffff;
-      border-color: #0f172a;
     }
+    .btn-rawbt { background: #4f46e5; box-shadow: 0 2px 8px rgba(79,70,229,.35); }
+    .btn-app { background: #059669; }
+    .btn-browser { background: #ffffff; color: #0f172a; border: 1px solid #cbd5e1; }
+    .btn-close { background: #64748b; }
+    .btn:disabled { opacity: .55; cursor: progress; }
 
-    .btn-row {
-      display: flex;
-      gap: 8px;
-    }
-
-    .btn-print {
-      background: #4f46e5;
-      color: white;
-      border: none;
-      padding: 9px 16px;
-      border-radius: 8px;
-      font-weight: bold;
+    .link-alt {
+      display: inline-block;
+      font-size: 11px;
+      color: #475569;
+      text-decoration: underline;
       cursor: pointer;
-      font-size: 12px;
-      box-shadow: 0 2px 6px rgba(79,70,229,0.3);
+      margin-top: 2px;
     }
 
-    .btn-close {
-      background: #64748b;
-      color: white;
-      border: none;
-      padding: 9px 16px;
-      border-radius: 8px;
-      font-weight: bold;
-      cursor: pointer;
-      font-size: 12px;
+    .hint {
+      font-size: 10px;
+      color: #64748b;
+      line-height: 1.45;
+      margin-top: 8px;
+      text-align: left;
     }
+    .hint b { color: #0f172a; }
+
+    .status {
+      font-size: 11px;
+      font-weight: 600;
+      border-radius: 8px;
+      padding: 7px 8px;
+      margin-bottom: 9px;
+      display: none;
+      text-align: left;
+    }
+    .status.show { display: block; }
+    .status.ok { background: #dcfce7; color: #166534; }
+    .status.err { background: #fee2e2; color: #991b1b; }
+    .status.info { background: #e0e7ff; color: #3730a3; }
 
     @media print {
-      @page {
-        size: auto;
-        margin: 0;
-      }
-      body {
-        width: 100%;
-        padding: 0;
-        margin: 0;
-        background: #ffffff;
-      }
+      @page { size: auto; margin: 0; }
+      body { width: 100%; padding: 0; margin: 0; background: #ffffff; }
       .ticket {
         width: 100% !important;
         max-width: 100% !important;
@@ -140,103 +234,228 @@
         box-shadow: none;
         border-radius: 0;
       }
-      .no-print {
-        display: none !important;
-      }
+      .no-print { display: none !important; }
     }
   </style>
 </head>
 <body>
   <div class="ticket" id="ticketBox">
-    <div class="text-center">
-      <div class="title"><%= settings.company_name || company || 'INTERNET SERVICE' %></div>
-      <div class="subtitle"><%= settings.company_address || 'Pusat Layanan Internet Terpercaya' %></div>
-      <% if (settings.company_phone) { %>
-        <div class="subtitle">Telp/WA: <%= settings.company_phone %></div>
-      <% } %>
-    </div>
+    <img src="<%= receipt.logoUrl %>" alt="Logo <%= receipt.company.name %>" class="logo"
+         onerror="this.style.display='none'">
 
-    <div class="divider"></div>
-
-    <div class="text-center fw-bold" style="font-size: 11px; margin: 4px 0;">STRUK BUKTI PEMBAYARAN</div>
-
-    <div class="divider"></div>
-
-    <div class="row-item"><span class="label">No. Faktur:</span><span class="val">#INV-<%= String(invoice.id).padStart(4, '0') %></span></div>
-    <div class="row-item"><span class="label">Waktu:</span><span class="val"><%= formatDateLocal(getNowLocal()) %></span></div>
-    <div class="row-item"><span class="label">Petugas:</span><span class="val"><%= collectorName || 'Kasir / Admin' %></span></div>
-
-    <div class="divider"></div>
-
-    <div class="row-item"><span class="label">ID Pelg:</span><span class="val">#<%= customer.id %></span></div>
-    <div class="row-item"><span class="label">Nama:</span><span class="val"><%= customer.name %></span></div>
-    <% if (customer.phone) { %>
-      <div class="row-item"><span class="label">No. HP:</span><span class="val"><%= customer.phone %></span></div>
+    <div class="title"><%= receipt.company.name %></div>
+    <% if (receipt.company.address) { %>
+      <div class="subtitle"><%= receipt.company.address %></div>
     <% } %>
-    <% if (customer.pppoe_username) { %>
-      <div class="row-item"><span class="label">PPPoE:</span><span class="val"><%= customer.pppoe_username %></span></div>
+    <% if (receipt.company.phone) { %>
+      <div class="subtitle">Telp/WA: <%= receipt.company.phone %></div>
     <% } %>
-    <div class="row-item"><span class="label">Paket:</span><span class="val"><%= invoice.package_name || customer.package_name || 'Internet Broadband' %></span></div>
-    <div class="row-item"><span class="label">Periode:</span><span class="val"><%= invoice.period_month %>/<%= invoice.period_year %></span></div>
 
     <div class="divider"></div>
+    <div class="fw-bold" style="font-size:11px;margin:4px 0"><%= receipt.title %></div>
+    <div class="divider"></div>
+
+    <% receipt.sections.forEach(rows => { %>
+      <% rows.forEach(r => { %>
+        <div class="rowline"><span class="lbl"><%= r.label %>:</span> <span class="val"><%= r.value %></span></div>
+      <% }) %>
+      <div class="divider"></div>
+    <% }) %>
 
     <div class="total-box">
-      <div style="font-size: 10px; font-weight: bold;">TOTAL PEMBAYARAN</div>
-      <% const amt = invoice.amount != null ? invoice.amount : (customer.package_price != null ? customer.package_price : 0); %>
-      <div class="total-amount">Rp <%= parseInt(amt || 0).toLocaleString('id-ID') %></div>
-      <div class="badge-status">*** LUNAS ***</div>
+      <div style="font-size:10px;font-weight:bold"><%= receipt.total.label %></div>
+      <div class="total-amount"><%= receipt.total.value %></div>
+      <div class="badge-status"><%= receipt.total.status %></div>
     </div>
 
-    <div class="text-center subtitle" style="margin-top: 8px;">
-      Simpan struk ini sebagai bukti pembayaran yang sah.<br>
-      <strong>Terima Kasih atas Pembayaran Anda!</strong>
-    </div>
-
-    <div class="no-print">
-      <div class="btn-group-size">
-        <button type="button" class="btn-size active" id="btn58" onclick="setPaperSize('58mm')">Thermal 58mm</button>
-        <button type="button" class="btn-size" id="btn80" onclick="setPaperSize('80mm')">Thermal 80mm</button>
-      </div>
-      <div class="btn-row">
-        <button class="btn-print" onclick="window.print()">🖨️ Cetak Struk</button>
-        <button class="btn-close" onclick="window.close()">✕ Tutup</button>
-      </div>
+    <div class="subtitle" style="margin-top:8px">
+      <%= receipt.footer[0] %><br>
+      <strong><%= receipt.footer[1] %></strong>
     </div>
   </div>
 
+  <div class="panel no-print" id="panelBox">
+    <div id="statusBox" class="status"></div>
+
+    <div class="panel-label">Ukuran Kertas</div>
+    <div class="opt-row">
+      <button type="button" class="btn-opt active" id="btn58" onclick="setPaperSize('58mm')">58 mm</button>
+      <button type="button" class="btn-opt" id="btn80" onclick="setPaperSize('80mm')">80 mm</button>
+    </div>
+
+    <div class="panel-label">Logo di Struk</div>
+    <div class="opt-row">
+      <button type="button" class="btn-opt active" id="btnLogoSharp" onclick="setLogoMode('auto')">Tajam</button>
+      <button type="button" class="btn-opt" id="btnLogoSoft" onclick="setLogoMode('dither')">Halus</button>
+      <button type="button" class="btn-opt" id="btnLogoOff" onclick="setLogoMode('off')">Tanpa</button>
+    </div>
+
+    <button class="btn btn-app" id="btnApp" onclick="printViaApp()" style="display:none">
+      📲 Cetak via Aplikasi (Bluetooth)
+    </button>
+
+    <button class="btn btn-rawbt" id="btnRawbt" onclick="printViaRawBT()">
+      🖨️ Cetak Thermal ESC/POS (RawBT)
+    </button>
+
+    <button class="btn btn-browser" onclick="window.print()">📄 Cetak Browser (A4 / PDF)</button>
+    <button class="btn btn-close" onclick="window.close()">✕ Tutup</button>
+
+    <span class="link-alt" onclick="savePrn()">Simpan file .prn (buka manual di RawBT)</span>
+
+    <div class="hint">
+      <b>ESC/POS + RawBT</b> mengirim perintah printer mentah, jadi struk keluar
+      persis selebar kertas 58/80&nbsp;mm — bukan diperkecil ke A4 seperti cetak
+      bawaan browser. Pasang aplikasi <b>RawBT</b> dari Play Store, pair printer
+      Bluetooth-nya sekali, lalu tekan tombol ungu di atas.
+    </div>
+  </div>
+
+  <script type="application/json" id="receiptData"><%- JSON.stringify(receipt).replace(/</g, '\\u003c') %></script>
+
   <script>
+    var R = JSON.parse(document.getElementById('receiptData').textContent);
+    var paperSize = '58mm';
+    var logoMode = 'auto'; // 'auto' | 'dither' | 'off'
+
+    var ticketBox = document.getElementById('ticketBox');
+    var panelBox = document.getElementById('panelBox');
+    var statusBox = document.getElementById('statusBox');
+    var btnRawbt = document.getElementById('btnRawbt');
+
+    function setStatus(text, kind) {
+      statusBox.textContent = text || '';
+      statusBox.className = 'status' + (text ? ' show ' + (kind || 'info') : '');
+    }
+
     function setPaperSize(size) {
-      const box = document.getElementById('ticketBox');
-      const b58 = document.getElementById('btn58');
-      const b80 = document.getElementById('btn80');
-      if (size === '80mm') {
-        box.classList.add('size-80mm');
-        b80.classList.add('active');
-        b58.classList.remove('active');
-        localStorage.setItem('thermal_paper_size', '80mm');
-      } else {
-        box.classList.remove('size-80mm');
-        b58.classList.add('active');
-        b80.classList.remove('active');
-        localStorage.setItem('thermal_paper_size', '58mm');
+      paperSize = size === '80mm' ? '80mm' : '58mm';
+      ticketBox.classList.toggle('size-80mm', paperSize === '80mm');
+      panelBox.classList.toggle('size-80mm', paperSize === '80mm');
+      document.getElementById('btn80').classList.toggle('active', paperSize === '80mm');
+      document.getElementById('btn58').classList.toggle('active', paperSize === '58mm');
+      try { localStorage.setItem('thermal_paper_size', paperSize); } catch (e) {}
+    }
+
+    function setLogoMode(mode) {
+      logoMode = (mode === 'dither' || mode === 'off') ? mode : 'auto';
+      document.getElementById('btnLogoSharp').classList.toggle('active', logoMode === 'auto');
+      document.getElementById('btnLogoSoft').classList.toggle('active', logoMode === 'dither');
+      document.getElementById('btnLogoOff').classList.toggle('active', logoMode === 'off');
+      var img = document.querySelector('.logo');
+      if (img) img.style.visibility = logoMode === 'off' ? 'hidden' : '';
+      try { localStorage.setItem('thermal_logo_mode', logoMode); } catch (e) {}
+    }
+
+    /**
+     * Susun byte ESC/POS. Semua blok dicetak dengan ESC a 1 (rata tengah),
+     * dan logo di-raster selebar kertas sehingga ikut center di printer
+     * yang mengabaikan perintah align untuk gambar.
+     */
+    async function buildReceiptBytes() {
+      var spec = EscPos.PAPER[paperSize];
+      var b = new EscPos.Builder({ paper: paperSize });
+
+      b.init().align('center');
+
+      if (logoMode !== 'off') {
+        try {
+          var raster = await EscPos.rasterFromUrl(R.logoUrl, {
+            dots: spec.dots,
+            widthRatio: 0.8,
+            maxHeight: paperSize === '80mm' ? 190 : 140,
+            mode: logoMode
+          });
+          b.image(raster).blank(1);
+        } catch (e) {
+          // Logo opsional: kalau belum diunggah, struk tetap tercetak.
+          console.warn('Logo dilewati:', e.message);
+        }
+      }
+
+      b.bold(true).size(2, 2).line(R.company.name).size(1, 1).bold(false);
+      if (R.company.address) b.line(R.company.address);
+      if (R.company.phone) b.line('Telp/WA: ' + R.company.phone);
+
+      b.divider('-').bold(true).line(R.title).bold(false).divider('-');
+
+      R.sections.forEach(function (rows) {
+        rows.forEach(function (r) { b.line(r.label + ': ' + r.value); });
+        b.divider('-');
+      });
+
+      b.line(R.total.label)
+       .bold(true).size(2, 2).line(R.total.value).size(1, 1)
+       .line(R.total.status).bold(false)
+       .divider('-');
+
+      R.footer.forEach(function (f) { b.line(f); });
+
+      return b.blank(1).cut(3).toUint8Array();
+    }
+
+    async function withBusy(btn, label, fn) {
+      var original = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = label;
+      try {
+        await fn();
+      } catch (e) {
+        setStatus('Gagal menyiapkan data cetak: ' + e.message, 'err');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = original;
       }
     }
 
-    // Restore saved size
-    const savedSize = localStorage.getItem('thermal_paper_size');
-    if (savedSize === '80mm') {
-      setPaperSize('80mm');
+    function printViaRawBT() {
+      withBusy(btnRawbt, '⏳ Menyiapkan...', async function () {
+        var bytes = await buildReceiptBytes();
+
+        if (!EscPos.RawBT.isAndroid()) {
+          setStatus('RawBT hanya berjalan di Android. Di komputer, pakai "Simpan file .prn" lalu kirim ke HP, atau gunakan Cetak Browser.', 'err');
+          return;
+        }
+
+        setStatus('Membuka RawBT (' + paperSize + ', ' + bytes.length + ' byte)... Jika RawBT belum terpasang, Play Store akan terbuka.', 'ok');
+        EscPos.RawBT.print(bytes);
+      });
     }
 
-    // Otomatis buka dialog pemilih printer saat halaman dimuat
-    window.addEventListener('DOMContentLoaded', () => {
-      setTimeout(() => {
-        if (!window.location.search.includes('noprint')) {
-          window.print();
-        }
-      }, 350);
-    });
+    function savePrn() {
+      buildReceiptBytes().then(function (bytes) {
+        EscPos.RawBT.downloadPrn(bytes, R.filename);
+        setStatus('File ' + R.filename + ' tersimpan. Buka lewat RawBT untuk mencetak.', 'ok');
+      }).catch(function (e) {
+        setStatus('Gagal membuat file: ' + e.message, 'err');
+      });
+    }
+
+    /** Di dalam APK, cetak lewat jembatan Bluetooth bawaan aplikasi. */
+    function printViaApp() {
+      try {
+        window.AndroidPrinter.printInvoice(JSON.stringify(R.bridge));
+        setStatus('Perintah cetak dikirim ke printer Bluetooth aplikasi.', 'ok');
+      } catch (e) {
+        setStatus('Gagal cetak via aplikasi: ' + e.message, 'err');
+      }
+    }
+
+    (function init() {
+      try {
+        var savedSize = localStorage.getItem('thermal_paper_size');
+        if (savedSize) setPaperSize(savedSize);
+        var savedLogo = localStorage.getItem('thermal_logo_mode');
+        if (savedLogo) setLogoMode(savedLogo);
+      } catch (e) {}
+
+      // Tombol jembatan APK hanya muncul kalau halaman dibuka dari dalam aplikasi.
+      if (window.AndroidPrinter && typeof window.AndroidPrinter.printInvoice === 'function') {
+        document.getElementById('btnApp').style.display = 'block';
+      } else if (!EscPos.RawBT.isAndroid()) {
+        setStatus('Perangkat ini bukan Android. Cetak thermal RawBT hanya tersedia di HP Android.', 'info');
+      }
+    })();
   </script>
 </body>
 </html>

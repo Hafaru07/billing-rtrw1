@@ -440,7 +440,14 @@ router.post('/payment-request', requireCollectorSession, express.urlencoded({ ex
         }
       }
 
-      req.session._msg = { type: 'success', text: `Pembayaran berhasil diproses, tagihan lunas${unisolatedText}. <a href="/collector/invoice/${invoiceId}/print-thermal" target="_blank" class="btn btn-sm btn-dark ms-2 fw-bold"><i class="bi bi-printer"></i> Cetak Struk (Bluetooth Thermal)</a>` };
+      const invLabel = `#INV-${String(invoiceId).padStart(4, '0')}`;
+      req.session._msg = {
+        type: 'success',
+        text: `<span class="badge bg-success me-1"><i class="bi bi-check-circle-fill"></i> TERBAYAR</span> `
+            + `Tagihan <strong>${invLabel}</strong> sudah <strong>LUNAS</strong>${unisolatedText}. `
+            + `<a href="/collector/invoice/${invoiceId}/print-thermal" target="_blank" class="btn btn-sm btn-dark ms-2 fw-bold">`
+            + `<i class="bi bi-printer"></i> Cetak Struk Thermal Bluetooth (ESC/POS)</a>`
+      };
     } else {
       // Manual approval: insert as pending
       db.prepare(`
