@@ -1,0 +1,21 @@
+{
+  "_catatan": "Nodemon bawaan menonton SEMUA berkas .js/.json di proyek, termasuk berkas yang ditulis aplikasi sendiri saat berjalan (sesi WhatsApp, settings.json, database, log). Itu membuat server restart tanpa henti dan koneksi WhatsApp tidak pernah sempat terbuka. Daftar 'ignore' di bawah hanya berisi jalur yang memang ditulis aplikasi saat runtime.",
+  "ignore": [
+    "settings.json",
+    "version.txt",
+    "auth_info_baileys/",
+    "data/",
+    "database/",
+    "logs/",
+    "backups/",
+    "public/uploads/",
+    "android-app/",
+    "*.db",
+    "*.db-shm",
+    "*.db-wal",
+    "*.log",
+    "*.jsonl"
+  ],
+  "ext": "js,mjs,cjs,json",
+  "delay": 1500
+}

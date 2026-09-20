@@ -81,6 +81,8 @@ function getAllCustomers(search = '', routerId = null, filterStatus = '', filter
            r.name as router_name,
            o.name as olt_name,
            odp.name as odp_name,
+           col.name as collector_name,
+           col.username as collector_username,
            (SELECT COUNT(*) FROM invoices WHERE customer_id=c.id AND status='unpaid') as unpaid_count,
            u.bytes_in, u.bytes_out
     FROM customers c
@@ -88,6 +90,7 @@ function getAllCustomers(search = '', routerId = null, filterStatus = '', filter
     LEFT JOIN routers r ON c.router_id = r.id
     LEFT JOIN olts o ON c.olt_id = o.id
     LEFT JOIN odps odp ON c.odp_id = odp.id
+    LEFT JOIN collectors col ON c.collector_id = col.id
     LEFT JOIN customer_usage u ON u.customer_id = c.id AND u.period_month = ${month} AND u.period_year = ${year}
   `;
 
@@ -154,12 +157,14 @@ function getCustomerById(id) {
            p.billing_type as package_billing_type, p.duration_days as package_duration_days,
            p.promo_cycles as package_promo_cycles,
            p.prorate_first_invoice as package_prorate_first_invoice,
-           r.name as router_name, o.name as olt_name, odp.name as odp_name
+           r.name as router_name, o.name as olt_name, odp.name as odp_name,
+           col.name as collector_name, col.username as collector_username
     FROM customers c 
     LEFT JOIN packages p ON c.package_id = p.id 
     LEFT JOIN routers r ON c.router_id = r.id
     LEFT JOIN olts o ON c.olt_id = o.id
     LEFT JOIN odps odp ON c.odp_id = odp.id
+    LEFT JOIN collectors col ON c.collector_id = col.id
     WHERE c.id = ?
   `).get(id);
 }
@@ -266,13 +271,58 @@ function updateCustomer(id, data) {
   return result;
 }
 
+/**
+ * Update terbatas untuk portal kolektor: hanya kontak dan titik koordinat.
+ * Sengaja TIDAK memakai updateCustomer() yang menimpa seluruh kolom, dan tidak
+ * menyentuh MikroTik sama sekali sehingga koneksi pelanggan tidak terpengaruh.
+ */
+function updateCustomerContact(id, data) {
+  const cid = parseInt(id, 10);
+  if (!cid) throw new Error('ID pelanggan tidak valid');
+
+  const prev = db.prepare('SELECT name, phone, address, lat, lng FROM customers WHERE id = ?').get(cid);
+  if (!prev) throw new Error('Pelanggan tidak ditemukan');
+
+  const name = String(data.name === undefined ? prev.name : (data.name || '')).trim();
+  if (!name) throw new Error('Nama wajib diisi');
+
+  // Koordinat kosong berarti tidak diubah, supaya GPS yang gagal ambil posisi
+  // tidak menghapus titik yang sudah tersimpan.
+  const coord = function (val, fallback) {
+    if (val === undefined || val === null || String(val).trim() === '') return fallback || '';
+    const s = String(val).trim();
+    return Number.isFinite(Number(s)) ? s : (fallback || '');
+  };
+
+  return db.prepare(`
+    UPDATE customers SET name = ?, phone = ?, address = ?, lat = ?, lng = ? WHERE id = ?
+  `).run(
+    name,
+    data.phone === undefined ? (prev.phone || '') : String(data.phone || '').trim(),
+    data.address === undefined ? (prev.address || '') : String(data.address || '').trim(),
+    coord(data.lat, prev.lat),
+    coord(data.lng, prev.lng),
+    cid
+  );
+}
+
 function updateCustomerCablePath(id, path) {
   return db.prepare('UPDATE customers SET cable_path = ? WHERE id = ?').run(path, id);
 }
 
-async function deleteCustomer(id) {
+// options.removeFromMikrotik = false -> hapus data di portal saja.
+// Akun PPPoE / hotspot / static IP di MikroTik SENGAJA dibiarkan apa adanya
+// supaya koneksi pelanggan tidak ikut mati. Default tetap true agar perilaku
+// tombol hapus tunggal yang lama tidak berubah.
+async function deleteCustomer(id, options = {}) {
+  const { removeFromMikrotik = true } = options;
   const customer = getCustomerById(id);
   const mikrotikSvc = require('./mikrotikService');
+
+  if (!removeFromMikrotik) {
+    logger.info("[deleteCustomer] Hapus data portal saja untuk \"" + ((customer && customer.name) || id) + "\" (ID: " + id + "). Akun di MikroTik tidak disentuh.");
+    return db.prepare('DELETE FROM customers WHERE id=?').run(id);
+  }
   
   // WARNING: Check if customer has MikroTik connections without router_id
   const hasMikrotikConnection = customer && (
@@ -642,10 +692,30 @@ async function suspendCustomer(id) {
   return true;
 }
 
+function _handleUnsuspendInvoice(id, customer, wasSuspended, targetStatus) {
+  if (wasSuspended && (targetStatus === 'active' || targetStatus === 'ditangguhkan') && customer.package_id) {
+    try {
+      const now = new Date();
+      const curMonth = now.getMonth() + 1;
+      const curYear = now.getFullYear();
+      const existingCurInv = db.prepare('SELECT id FROM invoices WHERE customer_id = ? AND period_month = ? AND period_year = ? LIMIT 1').get(id, curMonth, curYear);
+      if (!existingCurInv) {
+        const billingSvc = require('./billingService');
+        billingSvc.generateInvoiceForCustomer(id, curMonth, curYear);
+        logger.info(`[activateCustomer] Pelanggan "${customer.name}" (ID: ${id}) dibuka dari isolir (status: ${targetStatus}). Tagihan periode berjalan ${curMonth}/${curYear} otomatis diterbitkan.`);
+      }
+    } catch (invErr) {
+      logger.error(`[activateCustomer] Gagal generate tagihan periode berjalan untuk pelanggan "${customer.name}" (ID: ${id}): ${invErr.message}`);
+    }
+  }
+}
+
 async function activateCustomer(id, targetStatus = 'active') {
   const customer = getCustomerById(id);
   if (!customer) throw new Error('Pelanggan tidak ditemukan');
   
+  const wasSuspended = (customer.status === 'suspended' || customer.status === 'isolated');
+
   // Get effective router_id (respects multi-router mode setting)
   const effectiveRouterId = getEffectiveRouterId(customer.router_id);
 
@@ -657,6 +727,7 @@ async function activateCustomer(id, targetStatus = 'active') {
   if (hasMikrotikConnection && !effectiveRouterId) {
     logger.warn(`[activateCustomer] Pelanggan "${customer.name}" (ID: ${id}) memiliki koneksi ${customer.connection_type} tapi router_id NULL dan tidak ada default router. Aktivasi lokal hanya, MikroTik tidak diupdate.`);
     updateCustomer(id, { ...customer, status: targetStatus });
+    _handleUnsuspendInvoice(id, customer, wasSuspended, targetStatus);
     return;
   }
 
@@ -708,12 +779,108 @@ async function activateCustomer(id, targetStatus = 'active') {
 
   // Update database status SETELAH MikroTik berhasil (atau gagal tapi continue)
   updateCustomer(id, { ...customer, status: targetStatus });
+  _handleUnsuspendInvoice(id, customer, wasSuspended, targetStatus);
   return true;
+}
+
+/**
+ * Top-up / Deposit or Adjust Customer Balance manually by Admin/Cashier
+ * @param {number|string} customerId 
+ * @param {number} amount - positive number
+ * @param {string} note - memo or payment source
+ * @param {string} actorName - admin or cashier name
+ * @param {'add'|'deduct'} actionType - 'add' or 'deduct'
+ * @param {boolean} sendWhatsApp - whether to send WA notification
+ */
+async function topupCustomerBalance(customerId, amount, note = '', actorName = 'Admin', actionType = 'add', sendWhatsApp = true) {
+  const cid = Number(customerId);
+  const amt = Math.abs(Number(amount) || 0);
+  if (!cid || amt <= 0) {
+    throw new Error('ID Pelanggan dan nominal valid wajib diisi.');
+  }
+
+  const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(cid);
+  if (!customer) {
+    throw new Error('Pelanggan tidak ditemukan.');
+  }
+
+  const isDeduct = actionType === 'deduct';
+  const delta = isDeduct ? -amt : amt;
+  const before = Number(customer.balance || 0);
+  const after = Math.max(0, before + delta);
+
+  // Execute in SQLite transaction
+  db.transaction(() => {
+    db.prepare('UPDATE customers SET balance = ? WHERE id = ?').run(after, cid);
+
+    const orderId = `MANUAL-${Date.now()}`;
+    const desc = note ? note.trim() : (isDeduct ? `Penyesuaian/Pemotongan Saldo oleh ${actorName}` : `Deposit Manual oleh ${actorName}`);
+    
+    try {
+      db.prepare(`
+        INSERT INTO customer_topup_requests (
+          customer_id, amount, payment_gateway, payment_order_id, payment_reference, payment_payload, status, paid_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'paid', (NOW_LOCAL()), (NOW_LOCAL()), (NOW_LOCAL()))
+      `).run(
+        cid,
+        delta,
+        'MANUAL_ADMIN',
+        orderId,
+        desc,
+        JSON.stringify({ actorName, actionType, note: desc, before, after, timestamp: new Date().toISOString() })
+      );
+    } catch (tblErr) {
+      logger.warn('[topupCustomerBalance] customer_topup_requests insert error: ' + tblErr.message);
+    }
+  })();
+
+  // WhatsApp Notification
+  if (sendWhatsApp && customer.phone) {
+    try {
+      const { getSettings } = require('../config/settingsManager');
+      const settings = getSettings();
+      if (settings.whatsapp_enabled) {
+        const { sendWA, whatsappStatus } = await import('./whatsappBot.mjs');
+        if (whatsappStatus.connection === 'open') {
+          const waMsg = !isDeduct
+            ? `✅ *DEPOSIT SALDO BERHASIL*\n\n` +
+              `Halo *${customer.name}*,\n` +
+              `Deposit saldo dompet Anda telah berhasil ditambahkan oleh pihak admin/kasir.\n\n` +
+              `💰 *Nominal:* Rp ${amt.toLocaleString('id-ID')}\n` +
+              `💳 *Total Saldo Sekarang:* Rp ${after.toLocaleString('id-ID')}\n` +
+              `📝 *Keterangan:* ${note || 'Setor Tunai / Manual'}\n` +
+              `👤 *Diterima oleh:* ${actorName}\n\n` +
+              `Saldo dapat langsung digunakan untuk pembelian pulsa, paket data, voucher, atau token PLN di portal/aplikasi Alijaya. Terima kasih!`
+            : `⚠️ *PENYESUAIAN SALDO DOMPET*\n\n` +
+              `Halo *${customer.name}*,\n` +
+              `Terdapat penyesuaian/pemotongan saldo dompet Anda oleh pihak admin.\n\n` +
+              `🔻 *Nominal:* -Rp ${amt.toLocaleString('id-ID')}\n` +
+              `💳 *Sisa Saldo:* Rp ${after.toLocaleString('id-ID')}\n` +
+              `📝 *Keterangan:* ${note || 'Penyesuaian Saldo'}\n` +
+              `👤 *Petugas:* ${actorName}`;
+
+          await sendWA(customer.phone, waMsg);
+        }
+      }
+    } catch (waErr) {
+      logger.error('[topupCustomerBalance] WA notification error: ' + waErr.message);
+    }
+  }
+
+  return {
+    success: true,
+    customerId: cid,
+    customer,
+    before,
+    after,
+    delta,
+    actionType
+  };
 }
 
 module.exports = {
   getAllCustomers, getAllCustomerAreas, getCustomerById, createCustomer, updateCustomer, deleteCustomer, getCustomerStats,
   getAllPackages, getPackageById, createPackage, updatePackage, deletePackage,
-  suspendCustomer, activateCustomer, findCustomerByAny, updateCustomerCablePath,
-  resetPromoCyclesUsed, getEffectiveRouterId
+  suspendCustomer, activateCustomer, findCustomerByAny, updateCustomerCablePath, updateCustomerContact,
+  resetPromoCyclesUsed, getEffectiveRouterId, topupCustomerBalance
 };

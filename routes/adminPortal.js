@@ -15,6 +15,7 @@ const adminSvc = require('../services/adminService');
 const agentSvc = require('../services/agentService');
 const oltSvc = require('../services/oltService');
 const odpSvc = require('../services/odpService');
+const netMapSvc = require('../services/networkMapService');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -695,6 +696,9 @@ router.get('/map', requireAdminSession, requireSidebarMenuAccess('map'), (req, r
     activePage: 'map', 
     customers, 
     odps,
+    netNodes: netMapSvc.getAllNodes(),
+    netLines: netMapSvc.getAllLines(),
+    lineColors: netMapSvc.LINE_COLORS,
     msg: flashMsg(req),
     settings: getSettings()
   });
@@ -876,6 +880,166 @@ router.post('/api/customers/:id/cable-path', requireAdminSession, (req, res) => 
   } catch (e) {
     console.error('[API] Save Cable Path Error:', e);
     res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ─── PETA JARINGAN: OBJEK (SERVER/ODC/TIANG) & JALUR ────────────────────────
+// Seluruh endpoint di bawah hanya menyentuh database peta.
+// Tidak ada pemanggilan MikroTik/GenieACS, jadi tidak pernah mengubah koneksi pelanggan.
+
+router.get('/api/map/objects', requireAdminSession, (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      nodes: netMapSvc.getAllNodes(),
+      lines: netMapSvc.getAllLines(),
+      colors: netMapSvc.LINE_COLORS
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+router.post('/api/map/nodes', requireAdminSession, restrictToAdmin, express.json({ limit: '256kb' }), (req, res) => {
+  try {
+    const result = netMapSvc.createNode(req.body || {});
+    res.json({ ok: true, id: result.lastInsertRowid, node: netMapSvc.getNodeById(result.lastInsertRowid) });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+router.post('/api/map/nodes/:id', requireAdminSession, restrictToAdmin, express.json({ limit: '256kb' }), (req, res) => {
+  try {
+    netMapSvc.updateNode(req.params.id, req.body || {});
+    res.json({ ok: true, node: netMapSvc.getNodeById(req.params.id) });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+router.post('/api/map/nodes/:id/delete', requireAdminSession, restrictToAdmin, (req, res) => {
+  try {
+    const node = netMapSvc.getNodeById(req.params.id);
+    if (!node) throw new Error('Objek tidak ditemukan');
+    netMapSvc.deleteNode(req.params.id);
+    logger.info(`[MapObject] ${node.type} "${node.name}" (ID: ${node.id}) dihapus dari peta oleh ${req.session.adminUser || 'admin'}`);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+router.post('/api/map/lines', requireAdminSession, restrictToAdmin, express.json({ limit: '1mb' }), (req, res) => {
+  try {
+    const result = netMapSvc.createLine(req.body || {});
+    res.json({ ok: true, id: result.lastInsertRowid, line: netMapSvc.getLineById(result.lastInsertRowid) });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+router.post('/api/map/lines/:id', requireAdminSession, restrictToAdmin, express.json({ limit: '1mb' }), (req, res) => {
+  try {
+    netMapSvc.updateLine(req.params.id, req.body || {});
+    res.json({ ok: true, line: netMapSvc.getLineById(req.params.id) });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+router.post('/api/map/lines/:id/delete', requireAdminSession, restrictToAdmin, (req, res) => {
+  try {
+    netMapSvc.deleteLine(req.params.id);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+// Menyimpan jalur kabel bergelombang milik ODP (JSON [[lat,lng], ...]).
+router.post('/api/map/odps/:id/cable-path', requireAdminSession, restrictToAdmin, express.json({ limit: '1mb' }), (req, res) => {
+  try {
+    netMapSvc.setOdpCablePath(req.params.id, (req.body && req.body.path) || null);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+// Menyambungkan ODP ke induknya (ODC / tiang) supaya garis otomatis bisa ditarik.
+router.post('/api/map/odps/:id/parent', requireAdminSession, restrictToAdmin, express.json({ limit: '64kb' }), (req, res) => {
+  try {
+    netMapSvc.setOdpParent(req.params.id, req.body && req.body.parent_node_id);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+// Redaman (RX power) per pelanggan untuk mewarnai garis client.
+// Hanya MEMBACA data dari ACS; tidak mengubah apa pun di perangkat.
+router.get('/api/map/rxpower', requireAdminSession, async (req, res) => {
+  try {
+    // listAllDevices() mengembalikan { ok, devices, message } — bukan array.
+    // Sebelumnya hasilnya diiterasi langsung sehingga selalu gagal dan redaman kosong.
+    const listed = await customerDevice.listAllDevices(999999);
+    const devices = (listed && Array.isArray(listed.devices)) ? listed.devices : (Array.isArray(listed) ? listed : []);
+    if (listed && listed.ok === false) {
+      logger.warn('[MapRxPower] GenieACS: ' + (listed.message || 'gagal mengambil daftar perangkat'));
+    }
+
+    // Satu kamus berisi semua identitas perangkat (tag, PPPoE, serial, ID).
+    // Dibuat longgar karena penamaan di ACS dan di data billing sering berbeda.
+    const kunci = {};
+    const daftar = function (nilai, rx) {
+      const k = String(nilai || '').trim().toLowerCase();
+      if (!k || k === '-' || k === 'n/a') return;
+      if (kunci[k] === undefined) kunci[k] = rx;
+    };
+
+    for (const d of (devices || [])) {
+      let mapped = {};
+      try { mapped = customerDevice.mapDeviceData(d, (d._tags && d._tags[0]) || d._id, false) || {}; } catch (e) { mapped = {}; }
+      const rx = parseFloat(String(mapped.rxPower == null ? '' : mapped.rxPower).trim());
+      if (!Number.isFinite(rx)) continue;
+
+      for (const tag of (Array.isArray(d._tags) ? d._tags : [])) {
+        const t = String(tag || '');
+        daftar(t, rx);
+        if (t.includes(':')) daftar(t.split(':').pop(), rx); // buang awalan seperti portal:
+      }
+
+      const pppoe = String(mapped.pppoeUsername || '');
+      daftar(pppoe, rx);
+      if (pppoe.includes('@')) daftar(pppoe.split('@')[0], rx); // bagian depan sebelum @
+
+      daftar(mapped.serialNumber, rx);
+      daftar(d._id, rx);
+    }
+
+    const out = {};
+    for (const c of customerSvc.getAllCustomers()) {
+      const tag = String(c.genieacs_tag || '').trim().toLowerCase();
+      const pppoe = String(c.pppoe_username || '').trim().toLowerCase();
+
+      // Dicoba dari yang paling pasti ke yang paling longgar.
+      const calon = [tag, pppoe];
+      if (pppoe.includes('@')) calon.push(pppoe.split('@')[0]);
+      if (tag.includes(':')) calon.push(tag.split(':').pop());
+
+      for (const k of calon) {
+        if (k && kunci[k] !== undefined) { out[c.id] = kunci[k]; break; }
+      }
+    }
+
+    logger.info('[MapRxPower] ' + devices.length + ' perangkat dibaca, ' +
+      Object.keys(kunci).length + ' identitas terkumpul, ' +
+      Object.keys(out).length + ' cocok ke pelanggan.');
+    res.json({ ok: true, rx: out, total_devices: devices.length, threshold: netMapSvc.RX_GOOD_MIN, colors: netMapSvc.LINE_COLORS });
+  } catch (e) {
+    logger.error('[MapRxPower] Gagal ambil redaman: ' + (e.message || e));
+    res.json({ ok: false, rx: {}, error: e.message });
   }
 });
 
@@ -1555,6 +1719,113 @@ router.get('/bulk', requireAdminSession, (req, res) => {
   res.render('admin/dashboard', { title: 'Konfigurasi Massal', company: company(), version: '2.0.0', activePage: 'bulk', billing: null, custStats: null, settings });
 });
 
+// ─── ONU MODEM STICKER PRINT ───────────────────────────────────────────────
+router.get('/onu-stickers', requireAdminSession, requireSidebarMenuAccess('onu_stickers'), async (req, res) => {
+  try {
+    const settings = getSettings();
+    const mode = req.query.mode === 'customers' ? 'customers' : 'blank';
+    const count = Math.max(1, Math.min(100, Number(req.query.count || 10)));
+    const searchQuery = String(req.query.q || '').trim();
+    const selectedRouterId = req.selectedRouterId || (req.query.router_id ? Number(req.query.router_id) : null);
+    const csPhone = req.query.cs_phone || settings.company_phone || settings.company_whatsapp || '08xxxxxxxxxx';
+    const serverBaseUrl = `${req.protocol}://${req.get('host')}`;
+
+    const routers = mikrotikService.getAllRouters();
+    let stickers = [];
+
+    if (mode === 'blank') {
+      const qrPayload = `${serverBaseUrl}/app/connect`;
+      const qrCodeDataUrl = await QRCode.toDataURL(qrPayload, {
+        margin: 1,
+        width: 250,
+        errorCorrectionLevel: 'M'
+      });
+
+      for (let i = 0; i < count; i++) {
+        stickers.push({
+          name: '',
+          id_display: '',
+          package_name: '',
+          qrCodeDataUrl
+        });
+      }
+    } else {
+      const customers = customerSvc.getAllCustomers(searchQuery, selectedRouterId, 'active');
+      const targetCusts = (customers || []).slice(0, 100);
+
+      for (const c of targetCusts) {
+        const qrPayload = `${serverBaseUrl}/app/connect?cid=${encodeURIComponent(c.pppoe_username || c.id)}`;
+        const qrCodeDataUrl = await QRCode.toDataURL(qrPayload, {
+          margin: 1,
+          width: 250,
+          errorCorrectionLevel: 'M'
+        });
+
+        stickers.push({
+          name: c.name,
+          id_display: `${c.pppoe_username || ('ID:' + c.id)}`,
+          package_name: c.package_name || 'Reguler',
+          qrCodeDataUrl
+        });
+      }
+    }
+
+    res.render('admin/onu_stickers', {
+      company: company(),
+      companyLogo: settings.company_logo || '',
+      csPhone,
+      mode,
+      count,
+      searchQuery,
+      selectedRouterId,
+      routers,
+      stickers
+    });
+  } catch (e) {
+    logger.error(`[ONU Stickers] Error: ${e.message}`);
+    res.status(500).send(`Gagal memuat stiker: ${e.message}`);
+  }
+});
+
+router.get('/customers/:id/sticker-onu', requireAdminSession, async (req, res) => {
+  try {
+    const settings = getSettings();
+    const customer = customerSvc.getCustomerById(req.params.id);
+    if (!customer) return res.status(404).send('Pelanggan tidak ditemukan');
+
+    const csPhone = settings.company_phone || settings.company_whatsapp || '08xxxxxxxxxx';
+    const serverBaseUrl = `${req.protocol}://${req.get('host')}`;
+
+    const qrPayload = `${serverBaseUrl}/app/connect?cid=${encodeURIComponent(customer.pppoe_username || customer.id)}`;
+    const qrCodeDataUrl = await QRCode.toDataURL(qrPayload, {
+      margin: 1,
+      width: 250,
+      errorCorrectionLevel: 'M'
+    });
+
+    const stickers = [{
+      name: customer.name,
+      id_display: `${customer.pppoe_username || ('ID:' + customer.id)}`,
+      package_name: customer.package_name || 'Reguler',
+      qrCodeDataUrl
+    }];
+
+    res.render('admin/onu_stickers', {
+      company: company(),
+      companyLogo: settings.company_logo || '',
+      csPhone,
+      mode: 'customers',
+      count: 1,
+      searchQuery: '',
+      selectedRouterId: null,
+      routers: [],
+      stickers
+    });
+  } catch (e) {
+    res.status(500).send(`Gagal memuat stiker: ${e.message}`);
+  }
+});
+
 // ─── CUSTOMERS ─────────────────────────────────────────────────────────────
 router.get('/customers', requireAdminSession, requireSidebarMenuAccess('customers'), async (req, res) => {
   const { search = '', status: filterStatus = '', area: filterArea = '' } = req.query;
@@ -1912,7 +2183,13 @@ router.post('/customers/:id/update', requireAdminSession, express.urlencoded({ e
 
     // Get old customer data to detect username changes
     const oldCustomer = customerSvc.getCustomerById(customerId);
-    
+
+    // Password PPPoE opsional: kalau dikosongkan, pakai yang sudah tersimpan
+    // supaya kredensial lama tidak terhapus tanpa sengaja.
+    if (!String(req.body.pppoe_password || '').trim() && oldCustomer && oldCustomer.pppoe_password) {
+      req.body.pppoe_password = oldCustomer.pppoe_password;
+    }
+
     customerSvc.updateCustomer(req.params.id, req.body);
     
     // ========================================================================
@@ -2019,6 +2296,48 @@ router.post('/customers/:id/update', requireAdminSession, express.urlencoded({ e
   res.redirect('/admin/customers');
 });
 
+// Hapus massal dari mode seleksi daftar pelanggan.
+// Ditaruh sebelum '/customers/:id/delete' supaya tidak tertangkap sebagai :id.
+router.post('/customers/delete-bulk', requireAdminSession, express.urlencoded({ extended: true }), async (req, res) => {
+  try {
+    const { customer_ids } = req.body;
+    const ids = Array.isArray(customer_ids) ? customer_ids : [customer_ids];
+    const clean = Array.from(new Set(
+      ids.map(x => Number(x)).filter(n => Number.isFinite(n) && n > 0)
+    ));
+    if (clean.length === 0) throw new Error('Tidak ada pelanggan yang dipilih');
+
+    const actor = req.session.adminUser || req.session.cashierUsername || 'admin';
+    let deleted = 0;
+    const failed = [];
+    for (const id of clean) {
+      const c = customerSvc.getCustomerById(id);
+      if (!c) { failed.push(`ID ${id} (tidak ditemukan)`); continue; }
+      try {
+        // Hapus data portal saja: akun PPPoE/hotspot/static IP di MikroTik dibiarkan
+        // supaya koneksi pelanggan tidak ikut mati.
+        await customerSvc.deleteCustomer(id, { removeFromMikrotik: false });
+        deleted++;
+        logger.info(`[BulkDelete] Pelanggan dihapus: ${c.name} (ID: ${id}) oleh ${actor}`);
+      } catch (e) {
+        logger.error(`[BulkDelete] Gagal hapus pelanggan ID ${id}: ${e.message || e}`);
+        failed.push(`${c.name}: ${e.message || String(e)}`);
+      }
+    }
+
+    let text = `${deleted} pelanggan berhasil dihapus dari portal. Koneksi di MikroTik tidak diubah.`;
+    if (failed.length > 0) {
+      const shown = failed.slice(0, 5);
+      const sisa = failed.length - shown.length;
+      text += `<br><small>Gagal ${failed.length}: ${shown.join('; ')}${sisa > 0 ? ` … dan ${sisa} lainnya` : ''}</small>`;
+    }
+    req.session._msg = { type: deleted > 0 ? 'success' : 'error', text };
+  } catch (e) {
+    req.session._msg = { type: 'error', text: 'Gagal hapus massal: ' + (e.message || String(e)) };
+  }
+  res.redirect('back');
+});
+
 router.post('/customers/:id/delete', requireAdminSession, async (req, res) => {
   try {
     await customerSvc.deleteCustomer(req.params.id);
@@ -2028,6 +2347,32 @@ router.post('/customers/:id/delete', requireAdminSession, async (req, res) => {
   }
   res.redirect('/admin/customers');
 });
+
+router.post('/customers/:id/topup', requireAdminSession, async (req, res) => {
+  try {
+    const custId = Number(req.params.id);
+    const amount = Number(req.body.amount);
+    const actionType = req.body.action_type === 'deduct' ? 'deduct' : 'add';
+    const note = req.body.note ? String(req.body.note).trim() : '';
+    const sendWhatsApp = req.body.send_wa === 'on' || req.body.send_wa === 'true' || req.body.send_wa === true;
+    const actorName = req.session?.isCashier ? resolvePaidByName(req, 'Kasir') : (req.session.adminUser || 'Admin');
+
+    if (!custId || isNaN(amount) || amount <= 0) {
+      throw new Error('Nominal saldo harus lebih dari 0.');
+    }
+
+    const result = await customerSvc.topupCustomerBalance(custId, amount, note, actorName, actionType, sendWhatsApp);
+    const actionText = actionType === 'deduct' ? 'dipotong' : 'ditambahkan';
+    req.session._msg = {
+      type: 'success',
+      text: `Saldo pelanggan ${result.customer?.name || ''} berhasil ${actionText} Rp ${amount.toLocaleString('id-ID')}. Sisa saldo: Rp ${result.after.toLocaleString('id-ID')}`
+    };
+  } catch (e) {
+    req.session._msg = { type: 'error', text: 'Gagal kelola saldo: ' + e.message };
+  }
+  res.redirect('/admin/customers');
+});
+
 
 router.post('/customers/:id/disconnect', requireAdminSession, async (req, res) => {
   try {
@@ -2083,7 +2428,10 @@ router.get('/customers/export', requireAdminSession, (req, res) => {
       'Tanggal Pasang': c.install_date,
       'Auto Isolir': c.auto_isolate === 1 ? 'YA' : 'TIDAK',
       'Tgl Isolir': c.isolate_day,
+      'Kolektor': c.collector_name || '-',
+      'OLT': c.olt_name || '-',
       'ODP': c.odp_name || '-',
+      'Port PON': c.pon_port || '',
       'Latitude': c.lat || '',
       'Longitude': c.lng || '',
       'Catatan': c.notes
@@ -2110,76 +2458,146 @@ router.post('/customers/import', requireAdminSession, upload.single('file'), asy
     const ws = wb.Sheets[wb.SheetNames[0]];
     const rows = XLSX.utils.sheet_to_json(ws);
     logger.info(`[Import] Found ${rows.length} rows in Excel file.`);
-    
+
     const packages = customerSvc.getAllPackages();
     const odps = odpSvc.getAllOdps();
     const routers = mikrotikService.getAllRouters();
+    const olts = oltSvc.getAllOlts();
+    const collectors = adminSvc.getAllCollectors();
     let count = 0;
+    let updated = 0;
+    const warnings = [];
 
-    for (let row of rows) {
+    // Ambil nilai dari kolom pertama yang benar-benar terisi; undefined kalau semua kosong.
+    const pick = (row, keys) => {
+      for (const k of keys) {
+        const v = row[k];
+        if (v !== undefined && v !== null && String(v).trim() !== '') return v;
+      }
+      return undefined;
+    };
+    const txt = (v) => (v === undefined || v === null) ? undefined : String(v).trim();
+    const key = (v) => String(v == null ? '' : v).trim().toLowerCase();
+    const byName = (item, k) => key(item.name) === k;
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const excelRow = i + 2; // +1 baris header, +1 karena baris Excel mulai dari 1
+
       // Normalize row keys (trim whitespace)
       const cleanRow = {};
-      Object.keys(row).forEach(key => {
-        cleanRow[key.trim()] = row[key];
+      Object.keys(row).forEach(k => {
+        cleanRow[k.trim()] = row[k];
       });
 
-      const name = cleanRow['Nama'] || cleanRow['name'] || cleanRow['Name'];
+      const name = txt(pick(cleanRow, ['Nama', 'name', 'Name']));
       if (!name) {
-        logger.debug('[Import] Skipping row - Name is empty.');
-        continue; 
+        logger.debug(`[Import] Skipping row ${excelRow} - Name is empty.`);
+        continue;
       }
 
-      const pkgName = cleanRow['Paket'] || cleanRow['package'] || cleanRow['Package'];
-      const pkg = packages.find(p => p.name === pkgName);
+      const rawId = txt(pick(cleanRow, ['ID', 'id']));
+      const targetId = (rawId && !isNaN(rawId)) ? Number(rawId) : null;
+      const prev = targetId ? customerSvc.getCustomerById(targetId) : null;
+      if (targetId && !prev) {
+        warnings.push(`Baris ${excelRow}: ID ${targetId} tidak ada, dibuat sebagai pelanggan baru`);
+      }
 
-      const odpName = cleanRow['ODP'] || cleanRow['odp'] || cleanRow['ODP Name'];
-      const odp = odps.find(o => o.name === odpName);
-      
-      // ✅ Handle Router field
-      const routerName = cleanRow['Router'] || cleanRow['router'] || cleanRow['Router Name'];
-      const router = routers.find(r => r.name === routerName);
-      
-      // ✅ NEW: Handle Connection Type
-      const connType = String(cleanRow['Tipe Koneksi'] || cleanRow['connection_type'] || cleanRow['Connection Type'] || 'pppoe').trim().toLowerCase() || 'pppoe';
-      
-      const data = {
-        nik: cleanRow['NIK'] || cleanRow['nik'] || cleanRow['No KTP'] || cleanRow['No. KTP'] || '',
-        name: name,
-        phone: cleanRow['Telepon'] || cleanRow['phone'] || cleanRow['Phone'],
-        email: cleanRow['Email'] || cleanRow['email'] || cleanRow['email_address'],
-        address: cleanRow['Alamat'] || cleanRow['address'] || cleanRow['Address'],
-        area: cleanRow['Area'] || cleanRow['area'] || cleanRow['Wilayah'] || '',
-        package_id: pkg ? pkg.id : null,
-        router_id: router ? router.id : null,
-        odp_id: odp ? odp.id : null,
-        lat: cleanRow['Latitude'] || cleanRow['latitude'] || cleanRow['Lat'] || '',
-        lng: cleanRow['Longitude'] || cleanRow['longitude'] || cleanRow['Lng'] || '',
-        genieacs_tag: cleanRow['Tag ONU'] || cleanRow['genieacs_tag'],
-        pppoe_username: connType === 'pppoe' ? (cleanRow['PPPoE Username'] || cleanRow['pppoe_username'] || '') : '',
-        hotspot_username: connType === 'hotspot' ? (cleanRow['Hotspot Username'] || cleanRow['hotspot_username'] || '') : '',
-        static_ip: connType === 'static' ? (cleanRow['Static IP'] || cleanRow['static_ip'] || '') : '',
-        connection_type: connType,
-        isolir_profile: cleanRow['Isolir Profile'] || cleanRow['isolir_profile'] || 'isolir',
-        status: (cleanRow['Status'] || cleanRow['status'] || 'active').toLowerCase(),
-        install_date: cleanRow['Tanggal Pasang'] || cleanRow['install_date'],
-        auto_isolate: (cleanRow['Auto Isolir'] === 'TIDAK' || cleanRow['auto_isolate'] === 0) ? 0 : 1,
-        isolate_day: parseInt(cleanRow['Tgl Isolir'] || cleanRow['isolate_day']) || 10,
-        notes: cleanRow['Catatan'] || cleanRow['notes']
+      // Sel kosong = pertahankan nilai lama saat update, bukan ditimpa jadi kosong.
+      const val = (keys, prevField, fallback = '') => {
+        const v = pick(cleanRow, keys);
+        if (v !== undefined) return v;
+        if (prev && prev[prevField] !== undefined && prev[prevField] !== null) return prev[prevField];
+        return fallback;
       };
-      
-      const id = cleanRow['ID'] || cleanRow['id'];
-      if (id && !isNaN(id) && id !== '') {
-        logger.info(`[Import] Updating customer ID: ${id}`);
-        customerSvc.updateCustomer(id, data);
+
+      // Cocokkan kolom teks (nama paket/router/OLT/ODP/kolektor) ke ID-nya.
+      const ref = (keys, list, matcher, prevField, label) => {
+        const raw = txt(pick(cleanRow, keys));
+        const prevVal = prev ? (prev[prevField] || null) : null;
+        if (raw === undefined || raw === '-') return prevVal;
+        const found = list.find(item => matcher(item, key(raw)));
+        if (!found) {
+          warnings.push(`Baris ${excelRow}: ${label} "${raw}" tidak ditemukan`);
+          return prevVal;
+        }
+        return found.id;
+      };
+
+      const packageId = ref(['Paket', 'package', 'Package'], packages, byName, 'package_id', 'Paket');
+      const routerId = ref(['Router', 'router', 'Router Name'], routers, byName, 'router_id', 'Router');
+      const oltId = ref(['OLT', 'olt', 'OLT Name', 'Nama OLT'], olts, byName, 'olt_id', 'OLT');
+      const odpId = ref(['ODP', 'odp', 'ODP Name'], odps, byName, 'odp_id', 'ODP');
+      const collectorId = ref(
+        ['Kolektor', 'kolektor', 'Collector', 'collector', 'Penagih'],
+        collectors,
+        (col, k) => key(col.name) === k || key(col.username) === k || key(col.name + ' (' + col.username + ')') === k,
+        'collector_id',
+        'Kolektor'
+      );
+
+      const connType = key(val(['Tipe Koneksi', 'connection_type', 'Connection Type'], 'connection_type', 'pppoe')) || 'pppoe';
+
+      const autoIsolateRaw = txt(pick(cleanRow, ['Auto Isolir', 'auto_isolate']));
+      const autoIsolate = autoIsolateRaw === undefined
+        ? (prev ? Number(prev.auto_isolate ?? 1) : 1)
+        : (['tidak', 'no', '0', 'false'].includes(key(autoIsolateRaw)) ? 0 : 1);
+
+      const data = {
+        nik: val(['NIK', 'nik', 'No KTP', 'No. KTP'], 'nik', ''),
+        name: name,
+        phone: val(['Telepon', 'phone', 'Phone', 'No HP', 'Nomor HP'], 'phone', ''),
+        email: val(['Email', 'email', 'email_address'], 'email', ''),
+        address: val(['Alamat', 'address', 'Address'], 'address', ''),
+        area: val(['Area', 'area', 'Wilayah'], 'area', ''),
+        package_id: packageId,
+        router_id: routerId,
+        olt_id: oltId,
+        odp_id: odpId,
+        collector_id: collectorId,
+        pon_port: val(['Port PON', 'pon_port', 'PON Port', 'Port PON / ODP'], 'pon_port', ''),
+        lat: val(['Latitude', 'latitude', 'Lat'], 'lat', ''),
+        lng: val(['Longitude', 'longitude', 'Lng'], 'lng', ''),
+        genieacs_tag: val(['Tag ONU', 'genieacs_tag'], 'genieacs_tag', ''),
+        pppoe_username: connType === 'pppoe' ? val(['PPPoE Username', 'pppoe_username'], 'pppoe_username', '') : '',
+        hotspot_username: connType === 'hotspot' ? val(['Hotspot Username', 'hotspot_username'], 'hotspot_username', '') : '',
+        static_ip: connType === 'static' ? val(['Static IP', 'static_ip'], 'static_ip', '') : '',
+        connection_type: connType,
+        isolir_profile: val(['Isolir Profile', 'isolir_profile'], 'isolir_profile', 'isolir'),
+        status: key(val(['Status', 'status'], 'status', 'active')) || 'active',
+        install_date: val(['Tanggal Pasang', 'install_date'], 'install_date', null) || null,
+        auto_isolate: autoIsolate,
+        isolate_day: parseInt(val(['Tgl Isolir', 'isolate_day'], 'isolate_day', 10), 10) || 10,
+        notes: val(['Catatan', 'notes'], 'notes', ''),
+        // Kolom di luar Excel — tetap dikirim supaya tidak terhapus, karena updateCustomer menimpa semua kolom
+        pppoe_password: prev ? (prev.pppoe_password || '') : '',
+        pppoe_remote_address: prev ? (prev.pppoe_remote_address || '') : '',
+        mac_address: prev ? (prev.mac_address || '') : '',
+        hotspot_password: prev ? (prev.hotspot_password || '') : '',
+        hotspot_profile: prev ? (prev.hotspot_profile || '') : '',
+        cable_path: prev ? (prev.cable_path || null) : null,
+        is_radius: prev ? Number(prev.is_radius ?? 1) : 1
+      };
+
+      if (prev) {
+        logger.info(`[Import] Updating customer ID: ${prev.id}`);
+        customerSvc.updateCustomer(prev.id, data);
+        updated++;
       } else {
         logger.info(`[Import] Creating new customer: ${name}`);
         customerSvc.createCustomer(data);
       }
       count++;
     }
-    
-    logger.info(`[Import] Finished. Total processed: ${count}`);
-    req.session._msg = { type: 'success', text: `Berhasil mengimpor ${count} data pelanggan.` };
+
+    logger.info(`[Import] Finished. Total processed: ${count} (update: ${updated}, baru: ${count - updated})`);
+    let text = `Berhasil mengimpor ${count} data pelanggan (${updated} diperbarui, ${count - updated} baru).`;
+    if (warnings.length > 0) {
+      const shown = warnings.slice(0, 10);
+      const sisa = warnings.length - shown.length;
+      text += `<br><small>Catatan: ${shown.join('; ')}${sisa > 0 ? ` … dan ${sisa} lainnya` : ''}</small>`;
+    }
+    req.session._msg = { type: 'success', text };
   } catch (e) {
     logger.error('Import error:', e);
     req.session._msg = { type: 'error', text: 'Gagal impor: ' + e.message };
@@ -2200,9 +2618,13 @@ router.post('/customers/:id/isolate', requireAdminSession, async (req, res) => {
 
 router.post('/customers/:id/unisolate', requireAdminSession, async (req, res) => {
   try {
-    await customerSvc.activateCustomer(req.params.id);
     const customer = customerSvc.getCustomerById(req.params.id);
-    req.session._msg = { type: 'success', text: `Layanan pelanggan "${customer.name}" berhasil diaktifkan kembali.` };
+    if (!customer) throw new Error('Pelanggan tidak ditemukan');
+    const unpaid = db.prepare("SELECT COUNT(*) as cnt FROM invoices WHERE customer_id=? AND status='unpaid'").get(req.params.id)?.cnt || 0;
+    const targetStatus = unpaid > 0 ? 'ditangguhkan' : 'active';
+    await customerSvc.activateCustomer(req.params.id, targetStatus);
+    const statusLabel = targetStatus === 'ditangguhkan' ? 'DITANGGUHKAN (Bebas auto-isolir sampai awal bulan berikutnya)' : 'AKTIF';
+    req.session._msg = { type: 'success', text: `Layanan pelanggan "${customer.name}" berhasil diaktifkan kembali (${statusLabel}).` };
   } catch (e) {
     req.session._msg = { type: 'error', text: 'Gagal aktivasi: ' + e.message };
   }
@@ -2563,9 +2985,16 @@ router.post('/billing/:id/send-pdf-wa', requireAdminSession, async (req, res) =>
 
 router.post('/billing/generate', requireAdminSession, express.urlencoded({ extended: true }), (req, res) => {
   try {
-    const { month, year } = req.body;
-    const count = billingSvc.generateMonthlyInvoices(parseInt(month), parseInt(year));
-    req.session._msg = { type: 'success', text: `${count} tagihan baru berhasil digenerate untuk periode ${month}/${year}.` };
+    const { month, year, due_from, due_to } = req.body;
+    const hasil = billingSvc.generateMonthlyInvoices(parseInt(month), parseInt(year), {
+      dueFrom: due_from,
+      dueTo: due_to
+    });
+
+    const rentang = hasil.pakaiRentang
+      ? ` (jatuh tempo tgl ${hasil.dueFrom}-${hasil.dueTo}, ${hasil.kandidat} pelanggan masuk rentang)`
+      : '';
+    req.session._msg = { type: 'success', text: `${hasil.created} tagihan baru berhasil digenerate untuk periode ${month}/${year}${rentang}.` };
   } catch (e) {
     req.session._msg = { type: 'error', text: 'Gagal generate: ' + e.message };
   }
@@ -6021,16 +6450,80 @@ router.post('/whatsapp/auto-billing', requireAdminSession, express.urlencoded({ 
     if (delay != null && Number.isFinite(delay) && delay >= 1 && delay <= 60) {
       next.whatsapp_broadcast_delay = delay;
     }
+
+    // Hari pengingat: H-1 selalu ikut, H-7/H-5/H-3 mengikuti toggle admin.
+    const hariIngat = [1];
+    if (req.body && req.body.remind_h7) hariIngat.push(7);
+    if (req.body && req.body.remind_h5) hariIngat.push(5);
+    if (req.body && req.body.remind_h3) hariIngat.push(3);
+    next.whatsapp_reminder_days = Array.from(new Set(hariIngat)).sort(function (a, b) { return b - a; });
+
+    // Rentang jeda antar pesan (detik). Dijaga agar min <= max dan tidak terlalu cepat.
+    let dMin = parseInt((req.body && req.body.delay_min) || 45, 10);
+    let dMax = parseInt((req.body && req.body.delay_max) || 100, 10);
+    if (!Number.isFinite(dMin) || dMin < 5) dMin = 45;
+    if (!Number.isFinite(dMax) || dMax > 600) dMax = 100;
+    if (dMax < dMin) { const t = dMin; dMin = dMax; dMax = t; }
+    next.whatsapp_delay_min = dMin;
+    next.whatsapp_delay_max = dMax;
     const msg = req.body && typeof req.body.message === 'string' ? req.body.message.trim() : '';
     if (msg) {
       db.saveAppSetting('whatsapp_auto_billing_message', msg);
     }
     saveSettings(next);
-    req.session._msg = { type: 'success', text: `Pengingat tagihan otomatis ${enabled ? 'diaktifkan' : 'dimatikan'}. Notifikasi tagihan ke pelanggan ${billingEnabled ? 'diaktifkan' : 'dimatikan'}.` };
+    req.session._msg = { type: 'success', text: `Pengingat tagihan otomatis ${enabled ? 'diaktifkan' : 'dimatikan'} (H-${next.whatsapp_reminder_days.join(', H-')}), jeda ${dMin}-${dMax} detik. Notifikasi tagihan ke pelanggan ${billingEnabled ? 'diaktifkan' : 'dimatikan'}.` };
   } catch (e) {
     req.session._msg = { type: 'error', text: 'Gagal menyimpan pengaturan: ' + e.message };
   }
   res.redirect('/admin/whatsapp/broadcast');
+});
+
+// ─── UJI COBA PESAN PENGINGAT ───────────────────────────────────────────────
+// Mengirim SATU pesan ke nomor yang diketik admin, memakai template pengingat
+// yang tersimpan. Dipakai untuk memastikan format pesan sudah benar sebelum
+// dikirim massal. Tidak menyentuh data pelanggan.
+router.post('/api/whatsapp/test-reminder', requireAdminSession, restrictToAdmin, express.json({ limit: '256kb' }), async (req, res) => {
+  try {
+    const nomorRaw = String((req.body && req.body.phone) || '').trim();
+    let digits = nomorRaw.replace(/\D/g, '');
+    if (digits.startsWith('0')) digits = '62' + digits.slice(1);
+    if (!digits || digits.length < 9) throw new Error('Nomor WhatsApp tidak valid');
+
+    const hMinus = parseInt((req.body && req.body.h_minus) || 1, 10) || 1;
+
+    const cronSvc = require('../services/cronService');
+    const defaultTemplate = `Yth. Pelanggan {{nama}},\n\nIni adalah pengingat sebelum tanggal jatuh tempo/isolir.`;
+    const template = String(db.getAppSetting('whatsapp_auto_billing_message', defaultTemplate) || defaultTemplate);
+
+    // Contoh data supaya admin melihat bentuk pesan yang sesungguhnya.
+    const namaContoh = String((req.body && req.body.nama) || 'Pelanggan Uji');
+    const baseUrl = String(getSetting('public_base_url', '') || '').replace(/\/+$/, '');
+    const link = baseUrl + '/customer/login';
+
+    const pesan = template
+      .replace(/{{nama}}/gi, namaContoh)
+      .replace(/{{tagihan}}/gi, '150.000')
+      .replace(/{{rincian}}/gi, '9/2026')
+      .replace(/{{paket}}/gi, 'Paket Uji 10 Mbps')
+      .replace(/{{link}}/gi, link)
+      .replace(/{{h-}}/gi, cronSvc.formatHMinus(hMinus));
+
+    // Pratinjau saja: tidak mengirim apa pun.
+    if (req.body && req.body.preview_only) {
+      return res.json({ ok: true, preview: true, phone: digits, message: pesan });
+    }
+
+    const { sendWA, whatsappStatus } = await import('../services/whatsappBot.mjs');
+    if (!whatsappStatus || whatsappStatus.connection !== 'open') {
+      throw new Error('WhatsApp bot belum terhubung. Hubungkan dulu di menu WhatsApp.');
+    }
+    await sendWA(digits, pesan);
+    logger.info('[TestReminder] Pesan uji H-' + hMinus + ' dikirim ke ' + digits);
+
+    res.json({ ok: true, preview: false, phone: digits, message: pesan });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message || String(e) });
+  }
 });
 
 router.get('/api/whatsapp/status', requireAdmin, async (req, res) => {
@@ -6065,11 +6558,14 @@ router.post('/whatsapp/test-notification', requireAdminSession, async (req, res)
     const waSvc = require('../services/whatsappService');
     const adminNumbers = getSetting('whatsapp_admin_numbers', []);
     const legacyNumbers = getSetting('admins', []);
-    let adminPhone = '087820851413'; // fallback
+    let adminPhone = getSetting('company_phone', '');
     if (Array.isArray(adminNumbers) && adminNumbers.length > 0) {
       adminPhone = adminNumbers[0];
     } else if (Array.isArray(legacyNumbers) && legacyNumbers.length > 0) {
       adminPhone = legacyNumbers[0];
+    }
+    if (!adminPhone) {
+      throw new Error('Nomor WhatsApp admin belum dikonfigurasi di Pengaturan WhatsApp / Perusahaan.');
     }
 
     logger.info(`[WA Test] Mengirim test notifikasi ke nomor admin: ${adminPhone}`);

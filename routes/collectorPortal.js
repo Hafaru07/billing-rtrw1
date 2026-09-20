@@ -225,7 +225,10 @@ router.get('/', requireCollectorSession, (req, res) => {
   } else if (scope === 'isolir') {
     q += " AND c.status = 'suspended'";
   } else if (scope === 'unpaid') {
-    q += " AND (i.status = 'unpaid' OR i.status IS NULL)";
+    // "Belum" = jatuh tempo tanggal 1 sampai KEMARIN; hari ini sudah punya tabnya sendiri.
+    // Kalau hari ini tanggal 1, berarti belum ada yang terlewat (rentang kosong).
+    q += " AND (i.status = 'unpaid' OR i.status IS NULL) AND c.isolate_day >= 1 AND c.isolate_day <= ?";
+    params.push(todayDay - 1);
   } else if (scope === 'paid') {
     q += " AND i.status = 'paid'";
   } else if (scope === 'multi') {
@@ -256,8 +259,9 @@ router.get('/', requireCollectorSession, (req, res) => {
   const summaryPeriod = db.prepare(`
     SELECT
       COUNT(DISTINCT c.id) as total_customer_count,
-      SUM(CASE WHEN (i.status='unpaid' OR i.status IS NULL) THEN 1 ELSE 0 END) as unpaid_count,
-      SUM(CASE WHEN (i.status='unpaid' OR i.status IS NULL) THEN COALESCE(i.amount, p.price, 0) ELSE 0 END) as unpaid_total,
+      -- Hitungan "Belum" mengikuti tab: jatuh tempo tanggal 1 s/d kemarin
+      SUM(CASE WHEN (i.status='unpaid' OR i.status IS NULL) AND c.isolate_day BETWEEN 1 AND ? THEN 1 ELSE 0 END) as unpaid_count,
+      SUM(CASE WHEN (i.status='unpaid' OR i.status IS NULL) AND c.isolate_day BETWEEN 1 AND ? THEN COALESCE(i.amount, p.price, 0) ELSE 0 END) as unpaid_total,
       SUM(CASE WHEN (i.status='unpaid' OR i.status IS NULL) AND c.isolate_day=? THEN 1 ELSE 0 END) as today_count,
       SUM(CASE WHEN (i.status='unpaid' OR i.status IS NULL) AND c.isolate_day=? THEN COALESCE(i.amount, p.price, 0) ELSE 0 END) as today_total,
       SUM(CASE WHEN c.status='suspended' THEN 1 ELSE 0 END) as isolir_count,
@@ -266,7 +270,7 @@ router.get('/', requireCollectorSession, (req, res) => {
     LEFT JOIN packages p ON c.package_id = p.id
     LEFT JOIN invoices i ON i.customer_id = c.id AND i.period_month=? AND i.period_year=?
     WHERE ${collectorWhere}
-  `).get(todayDay, todayDay, month, year, ...collectorParams) || {};
+  `).get(todayDay - 1, todayDay - 1, todayDay, todayDay, month, year, ...collectorParams) || {};
 
   const summaryMulti = db.prepare(`
     SELECT
@@ -323,6 +327,7 @@ router.get('/', requireCollectorSession, (req, res) => {
     search,
     scope,
     todayDay,
+    overdueUntil: todayDay - 1,
     summary,
     invoices: list,
     pendingMap,
@@ -467,6 +472,47 @@ router.post('/payment-request', requireCollectorSession, express.urlencoded({ ex
   if (req.body.search) qs.set('search', String(req.body.search));
   const suffix = qs.toString() ? ('?' + qs.toString()) : '';
   res.redirect('/collector' + suffix);
+});
+
+// ─── KOLEKTOR MELENGKAPI DATA PELANGGAN DI LAPANGAN ─────────────────────────
+// Hanya menulis Nama / No. Telp / Alamat / koordinat ke database portal.
+// Tidak ada pemanggilan MikroTik maupun GenieACS di sini.
+router.post('/customer/:id/update', requireCollectorSession, express.urlencoded({ extended: true }), (req, res) => {
+  try {
+    const custId = Number(req.params.id || 0);
+    if (!custId) throw new Error('Pelanggan tidak valid');
+
+    // Kolektor hanya boleh mengubah pelanggan yang memang jadi tanggungannya.
+    const collectorId = Number(req.session.collectorId || 0);
+    const row = db.prepare('SELECT area FROM collectors WHERE id = ?').get(collectorId);
+    const area = String((row && row.area) || '').trim();
+
+    const owned = area
+      ? db.prepare(`
+          SELECT id FROM customers
+          WHERE id = ? AND (collector_id = ? OR ((collector_id IS NULL OR collector_id = 0) AND LOWER(TRIM(area)) = LOWER(TRIM(?))))
+        `).get(custId, collectorId, area)
+      : db.prepare(`
+          SELECT id FROM customers
+          WHERE id = ? AND (collector_id = ? OR collector_id IS NULL)
+        `).get(custId, collectorId);
+
+    if (!owned) throw new Error('Pelanggan ini bukan tanggungan Anda');
+
+    customerSvc.updateCustomerContact(custId, {
+      name: req.body.name,
+      phone: req.body.phone,
+      address: req.body.address,
+      lat: req.body.lat,
+      lng: req.body.lng
+    });
+
+    logger.info(`[Collector] Data pelanggan #${custId} diperbarui oleh kolektor ${req.session.collectorName || collectorId}`);
+    req.session._msg = { type: 'success', text: 'Data pelanggan berhasil diperbarui.' };
+  } catch (e) {
+    req.session._msg = { type: 'error', text: 'Gagal memperbarui data: ' + (e.message || String(e)) };
+  }
+  res.redirect('back');
 });
 
 // ─── THERMAL RECEIPT PRINT ROUTE (58mm/80mm Bluetooth Printer) ───────────────

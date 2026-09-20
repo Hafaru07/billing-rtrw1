@@ -112,6 +112,9 @@
         <h6><i class="bi bi-people"></i> <%= t('admin.customers.list', 'Daftar Pelanggan') %> (<%= customers.length %>)</h6>
         <div style="display:flex;gap:8px">
           <button type="button" class="btn btn-g btn-sm" onclick="window.print()" title="Cetak Data Pelanggan"><i class="bi bi-printer"></i> Cetak</button>
+          <span class="text-muted small no-print" id="bulkCount">0 dipilih</span>
+          <button type="button" class="btn btn-d btn-sm no-print" id="bulkDeleteBtn" disabled><i class="bi bi-trash"></i> Hapus Massal</button>
+          <a href="/admin/onu-stickers" class="btn btn-g btn-sm" title="Cetak Stiker Modem / ONU"><i class="bi bi-qr-code-scan"></i> Stiker ONU</a>
           <a href="/admin/customers/export" class="btn btn-g btn-sm"><i class="bi bi-file-earmark-excel"></i> <%= t('admin.customers.export_excel', 'Export Excel') %></a>
           <button class="btn btn-g btn-sm" onclick="openModal('importModal')"><i class="bi bi-file-earmark-arrow-up"></i> <%= t('admin.customers.import_excel', 'Import Excel') %></button>
           <button class="btn btn-p btn-sm" onclick="openModal('addModal')"><i class="bi bi-plus-lg"></i> <%= t('admin.customers.add', 'Tambah Pelanggan') %></button>
@@ -149,10 +152,12 @@
           <% if (search || filterStatus || selectedRouterId) { %><a href="/admin/set-active-router?router_id=all" class="btn btn-g btn-sm"><i class="bi bi-x"></i> <%= t('common.reset', 'Reset') %></a><% } %>
         </form>
       </div>
+      <form id="bulkDeleteForm" method="POST" action="/admin/customers/delete-bulk" style="display:none"></form>
       <div class="tbl-wrap">
         <table class="dtbl">
           <thead>
             <tr>
+              <th class="no-print" style="width:34px"><input type="checkbox" id="cust_all" style="width:16px;height:16px" title="Pilih semua di halaman ini"></th>
               <th>#</th>
               <th><%= t('admin.customers.table.name', 'Nama') %></th>
               <th><%= t('admin.customers.table.phone_tag', 'Telepon / Tag ONU') %></th>
@@ -166,16 +171,20 @@
           </thead>
           <tbody>
           <% if (customers.length === 0) { %>
-            <tr><td colspan="8" class="text-center text-muted" style="padding:32px"><%= t('admin.customers.empty', 'Belum ada pelanggan') %></td></tr>
+            <tr><td colspan="10" class="text-center text-muted" style="padding:32px"><%= t('admin.customers.empty', 'Belum ada pelanggan') %></td></tr>
           <% } %>
           <% customers.forEach((c, i) => { %>
             <tr>
+              <td class="no-print"><input type="checkbox" class="cust_sel" style="width:16px;height:16px" data-id="<%= c.id %>" data-name="<%= c.name %>"></td>
               <td class="text-muted"><%= i+1 %></td>
               <td class="fw6">
                 <a href="javascript:void(0)" onclick="viewCustDetail(<%= i %>)" style="color:var(--primary);text-decoration:none;font-weight:700;display:inline-flex;align-items:center;gap:5px;cursor:pointer;" title="Klik untuk lihat detail pelanggan & MikroTik">
                   <%= c.name %>
                   <i class="bi bi-info-circle-fill" style="font-size:12px;opacity:0.75;"></i>
                 </a>
+                <div style="font-size:11px;font-weight:700;color:#10b981;margin-top:2px;display:flex;align-items:center;gap:4px;" title="Saldo Dompet Pelanggan">
+                  <i class="bi bi-wallet2"></i> Rp <%= Number(c.balance || 0).toLocaleString('id-ID') %>
+                </div>
               </td>
               <td>
                 <div><%= c.phone || '-' %></div>
@@ -259,8 +268,10 @@
               </td>
               <td>
                 <button class="btn btn-g btn-icon btn-sm" title="Lihat Detail & Koneksi MikroTik" onclick="viewCustDetail(<%= i %>)"><i class="bi bi-eye"></i></button>
+                <a href="/admin/customers/<%= c.id %>/sticker-onu" target="_blank" class="btn btn-g btn-icon btn-sm" title="Cetak Stiker Modem / ONU"><i class="bi bi-qr-code"></i></a>
                 <button class="btn btn-s btn-icon btn-sm" title="<%= t('admin.customers.actions.generate_invoice', 'Generate Tagihan') %>" data-idx="<%= i %>" onclick="openGenInvoice(+this.dataset.idx)"><i class="bi bi-lightning-charge"></i></button>
                 <button class="btn btn-p btn-icon btn-sm" title="<%= t('admin.customers.actions.pay_invoice', 'Bayar Tagihan') %>" data-idx="<%= i %>" onclick="openPayInvoice(+this.dataset.idx)"><i class="bi bi-cash-coin"></i></button>
+                <button class="btn btn-g btn-icon btn-sm" title="Kelola / Top-Up Saldo Dompet" data-idx="<%= i %>" onclick="openTopupModal(+this.dataset.idx)" style="color:#10b981;"><i class="bi bi-wallet2"></i></button>
                 <% if (typeof session !== 'undefined' && session && !session.isCashier) { %>
                 <% if (c.package_id && (c.package_promo_cycles || 0) > 0) { %>
                 <form method="POST" action="/admin/customers/<%= c.id %>/billing/reset-promo-cycles" style="display:inline" onsubmit="return confirm('Reset counter siklus promo untuk pelanggan ini? Tagihan berikutnya akan memakai harga promo lagi sesuai pengaturan paket.')">
@@ -422,8 +433,8 @@
                 </div>
               </div>
               <div class="fg">
-                <label class="fl" style="font-weight:700; color:var(--warning);"><i class="bi bi-key-fill"></i> <%= isRadiusActive ? 'Password PPPoE / RADIUS *' : 'Password PPPoE *' %></label>
-                <input class="fc" name="pppoe_password" id="add_pppoe_password" placeholder="Masukkan password PPPoE" required>
+                <label class="fl" style="font-weight:700; color:var(--warning);"><i class="bi bi-key-fill"></i> <%= isRadiusActive ? 'Password PPPoE / RADIUS' : 'Password PPPoE' %> <span style="font-weight:500;color:var(--muted)">(opsional)</span></label>
+                <input class="fc" name="pppoe_password" id="add_pppoe_password" placeholder="Boleh dikosongkan">
                 <small class="text-muted" style="font-size:10px;display:block;margin-top:4px"><%= isRadiusActive ? 'Kredensial login modem pelanggan untuk RADIUS & PPPoE.' : 'Kredensial login modem pelanggan untuk PPPoE MikroTik API.' %></small>
               </div>
             </div>
@@ -573,6 +584,10 @@
         <p style="font-size:13px;color:var(--muted);margin-bottom:16px">
           Unggah file Excel (.xlsx). Pastikan format kolom sesuai dengan hasil Export.
           <br><br>
+          Kolom <b>Paket</b>, <b>Router</b>, <b>Kolektor</b>, <b>OLT</b>, dan <b>ODP</b> diisi dengan <i>namanya</i> (bukan ID), persis seperti hasil Export.
+          <br><br>
+          Baris yang punya kolom <b>ID</b> akan <b>memperbarui</b> pelanggan tersebut; sel yang dibiarkan kosong <b>tidak menghapus</b> data lama.
+          <br><br>
           <a href="/admin/customers/export" style="color:var(--primary);text-decoration:none"><i class="bi bi-download"></i> Unduh format excel</a>
         </p>
         <div class="fg">
@@ -703,9 +718,9 @@
                 <div class="hint" id="e_pppoe_hint"></div>
               </div>
               <div class="fg">
-                <label class="fl" style="font-weight:700; color:var(--warning);"><i class="bi bi-key-fill"></i> Password PPPoE / RADIUS *</label>
-                <input class="fc" name="pppoe_password" id="e_pppoe_password" placeholder="Masukkan password PPPoE" required>
-                <small class="text-muted" style="font-size:10px;display:block;margin-top:4px">Kredensial login modem pelanggan untuk RADIUS & PPPoE.</small>
+                <label class="fl" style="font-weight:700; color:var(--warning);"><i class="bi bi-key-fill"></i> Password PPPoE / RADIUS <span style="font-weight:500;color:var(--muted)">(opsional)</span></label>
+                <input class="fc" name="pppoe_password" id="e_pppoe_password" placeholder="Kosongkan = tetap pakai yang lama">
+                <small class="text-muted" style="font-size:10px;display:block;margin-top:4px">Kredensial login modem pelanggan. Dikosongkan = password lama dipertahankan.</small>
               </div>
             </div>
           </div>
@@ -1096,6 +1111,13 @@
               <td id="v_expired_at" style="padding:6px 0">-</td>
             </tr>
             <tr>
+              <td style="color:var(--muted);padding:6px 0">Saldo Dompet Pelanggan</td>
+              <td style="padding:6px 0">
+                <span id="v_balance" style="font-weight:700;color:#10b981;font-size:14px">Rp 0</span>
+                <button type="button" class="btn btn-s btn-sm py-0 px-2 ms-2" onclick="openTopupFromDetail()"><i class="bi bi-wallet2"></i> Kelola Saldo</button>
+              </td>
+            </tr>
+            <tr>
               <td style="color:var(--muted);padding:6px 0">Tag ONU (GenieACS)</td>
               <td style="padding:6px 0">
                 <code id="v_genieacs" style="font-weight:700;color:var(--text);font-size:12px">-</code>
@@ -1120,6 +1142,97 @@
     </div>
   </div>
 </div>
+
+<!-- Modal Top-Up / Kelola Saldo Pelanggan -->
+<div class="mo" id="topupBalanceModal">
+  <div class="mb" style="max-width:540px;">
+    <div class="mh">
+      <span class="mt"><i class="bi bi-wallet2 text-success"></i> Kelola Saldo Dompet Pelanggan</span>
+      <button type="button" class="mc" onclick="closeModal('topupBalanceModal')">&times;</button>
+    </div>
+    <form method="POST" id="topupBalanceForm" action="">
+      <div class="mbody" style="padding:16px 20px;">
+        <!-- Info Pelanggan & Saldo Sekarang -->
+        <div style="background:var(--panel2);border:1px solid rgba(148,163,184,0.15);border-radius:10px;padding:12px;margin-bottom:16px;">
+          <div class="d-flex justify-content-between align-items-center">
+            <div>
+              <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;">Pelanggan</div>
+              <div id="topupCustomerName" style="font-weight:700;color:var(--text);font-size:15px;margin-top:2px;">-</div>
+            </div>
+            <div class="text-end">
+              <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;">Saldo Saat Ini</div>
+              <div id="topupCurrentBalance" style="font-weight:800;color:#10b981;font-size:16px;margin-top:2px;">Rp 0</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tipe Aksi: Tambah vs Potong -->
+        <div class="fg" style="margin-bottom:14px;">
+          <label class="fl" style="font-weight:600;margin-bottom:6px;">Jenis Transaksi Saldo</label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <label style="display:flex;align-items:center;gap:8px;padding:10px 14px;border:1.5px solid rgba(16,185,129,0.4);border-radius:10px;cursor:pointer;background:rgba(16,185,129,0.06);">
+              <input type="radio" name="action_type" value="add" checked onchange="updateTopupActionUI()" style="width:16px;height:16px;accent-color:#10b981;">
+              <div>
+                <div style="font-weight:700;font-size:13px;color:#10b981;"><i class="bi bi-plus-circle"></i> Tambah / Deposit</div>
+                <div style="font-size:10px;color:var(--muted);">Setor tunai / penambahan</div>
+              </div>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;padding:10px 14px;border:1.5px solid rgba(239,68,68,0.3);border-radius:10px;cursor:pointer;background:rgba(239,68,68,0.04);">
+              <input type="radio" name="action_type" value="deduct" onchange="updateTopupActionUI()" style="width:16px;height:16px;accent-color:#ef4444;">
+              <div>
+                <div style="font-weight:700;font-size:13px;color:#ef4444;"><i class="bi bi-dash-circle"></i> Potong / Koreksi</div>
+                <div style="font-size:10px;color:var(--muted);">Penyesuaian / refund</div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- Nominal Cepat -->
+        <div class="fg" style="margin-bottom:10px;">
+          <label class="fl" style="font-weight:600;margin-bottom:6px;">Pilih Nominal Cepat</label>
+          <div style="display:grid;grid-template-columns:repeat(3, 1fr);gap:6px;">
+            <button type="button" class="btn btn-g btn-sm" style="font-size:12px;font-weight:600;" onclick="setTopupNominal(10000)">10.000</button>
+            <button type="button" class="btn btn-g btn-sm" style="font-size:12px;font-weight:600;" onclick="setTopupNominal(20000)">20.000</button>
+            <button type="button" class="btn btn-g btn-sm" style="font-size:12px;font-weight:600;" onclick="setTopupNominal(50000)">50.000</button>
+            <button type="button" class="btn btn-g btn-sm" style="font-size:12px;font-weight:600;" onclick="setTopupNominal(100000)">100.000</button>
+            <button type="button" class="btn btn-g btn-sm" style="font-size:12px;font-weight:600;" onclick="setTopupNominal(200000)">200.000</button>
+            <button type="button" class="btn btn-g btn-sm" style="font-size:12px;font-weight:600;" onclick="setTopupNominal(500000)">500.000</button>
+          </div>
+        </div>
+
+        <!-- Input Nominal Manual -->
+        <div class="fg" style="margin-bottom:14px;">
+          <label class="fl" style="font-weight:600;">Nominal (Rp) <span class="text-danger">*</span></label>
+          <div style="position:relative;">
+            <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-weight:700;color:var(--muted);">Rp</span>
+            <input type="number" class="fc" name="amount" id="topupAmount" min="1000" step="1000" required placeholder="0" style="padding-left:38px;font-size:15px;font-weight:700;" oninput="updateTopupEstimatedBalance()">
+          </div>
+          <div id="topupEstimateHelp" style="font-size:11px;color:var(--muted);margin-top:4px;"></div>
+        </div>
+
+        <!-- Catatan / Sumber Pembayaran -->
+        <div class="fg" style="margin-bottom:14px;">
+          <label class="fl" style="font-weight:600;">Catatan / Keterangan Transaksi</label>
+          <input type="text" class="fc" name="note" id="topupNote" placeholder="Contoh: Setor Tunai di Loket Kasir, Refund, dll.">
+          <div style="font-size:11px;color:var(--muted);margin-top:2px;">Catatan ini akan tersimpan di riwayat transaksi dan tertera di struk WhatsApp.</div>
+        </div>
+
+        <!-- Checkbox Notifikasi WhatsApp -->
+        <div class="fg" style="margin-bottom:6px;">
+          <label style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:rgba(34,197,94,0.06);border:1px solid rgba(34,197,94,0.25);border-radius:8px;cursor:pointer;">
+            <input type="checkbox" name="send_wa" id="topupSendWa" checked style="width:16px;height:16px;accent-color:#10b981;">
+            <span style="font-size:12px;font-weight:600;color:var(--text);"><i class="bi bi-whatsapp text-success me-1"></i> Kirim Struk / Notifikasi WhatsApp ke Pelanggan</span>
+          </label>
+        </div>
+      </div>
+      <div class="mf d-flex justify-content-between">
+        <button type="button" class="btn btn-g" onclick="closeModal('topupBalanceModal')">Batal</button>
+        <button type="submit" class="btn btn-s" id="topupSubmitBtn"><i class="bi bi-check-lg"></i> Proses Top-Up</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 
 <script id="customers-data" type="application/json"><%- JSON.stringify(customers) %></script>
 <script id="sessions-data" type="application/json"><%- JSON.stringify(Array.from(typeof activeSessionsMap !== 'undefined' && activeSessionsMap && activeSessionsMap.entries ? activeSessionsMap.entries() : [])) %></script>
@@ -1267,6 +1380,7 @@ function viewCustDetail(idx) {
     }
     if (document.getElementById('v_genieacs')) document.getElementById('v_genieacs').textContent = c.genieacs_tag || '-';
     if (document.getElementById('v_status_account')) document.getElementById('v_status_account').textContent = `Status: ${c.status || 'active'} | Auto Isolir: ${c.auto_isolate === 0 ? 'Nonaktif' : 'Aktif (Tgl ' + (c.isolate_day || '-') + ')'}`;
+    if (document.getElementById('v_balance')) document.getElementById('v_balance').textContent = 'Rp ' + Number(c.balance || 0).toLocaleString('id-ID');
 
     if (document.getElementById('v_disconnect_form')) {
       document.getElementById('v_disconnect_form').action = '/admin/customers/' + c.id + '/disconnect';
@@ -1489,13 +1603,10 @@ function toggleConnectionFields(type) {
   // when connection type is hotspot or static (hidden required fields block form submit)
   const pppoePasswordEl = document.getElementById(type === 'add' ? 'add_pppoe_password' : 'e_pppoe_password');
   const pppoeUsernameEl = type === 'add' ? null : document.getElementById('e_pppoe');
+  // Password PPPoE bersifat opsional, jadi tidak pernah ditandai wajib.
   if (pppoePasswordEl) {
-    if (connType === 'pppoe') {
-      pppoePasswordEl.setAttribute('required', '');
-    } else {
-      pppoePasswordEl.removeAttribute('required');
-      pppoePasswordEl.value = '';
-    }
+    pppoePasswordEl.removeAttribute('required');
+    if (connType !== 'pppoe') pppoePasswordEl.value = '';
   }
   if (pppoeUsernameEl) {
     if (connType === 'pppoe') {
@@ -1576,6 +1687,90 @@ function openPayInvoice(idx) {
   openModal('payInvoiceModal');
   loadBillingYear();
 }
+
+let currentTopupCust = null;
+
+function openTopupModal(idx) {
+  const c = customersData[idx];
+  if (!c) return;
+  currentTopupCust = c;
+  document.getElementById('topupBalanceForm').action = '/admin/customers/' + c.id + '/topup';
+  document.getElementById('topupCustomerName').textContent = (c.name || '-') + (c.phone ? (' (' + c.phone + ')') : '');
+  const bal = Number(c.balance || 0);
+  document.getElementById('topupCurrentBalance').textContent = 'Rp ' + bal.toLocaleString('id-ID');
+  document.getElementById('topupAmount').value = '';
+  document.getElementById('topupNote').value = '';
+  const helpEl = document.getElementById('topupEstimateHelp');
+  if (helpEl) helpEl.textContent = '';
+  
+  const radioAdd = document.querySelector('#topupBalanceModal input[name="action_type"][value="add"]');
+  if (radioAdd) radioAdd.checked = true;
+  updateTopupActionUI();
+  
+  openModal('topupBalanceModal');
+}
+
+function openTopupFromDetail() {
+  if (currentDetailIdx === null) return;
+  const idx = currentDetailIdx;
+  closeModal('viewDetailModal');
+  setTimeout(() => openTopupModal(idx), 200);
+}
+
+function setTopupNominal(n) {
+  const amtInput = document.getElementById('topupAmount');
+  if (amtInput) {
+    amtInput.value = n;
+    updateTopupEstimatedBalance();
+  }
+}
+
+function updateTopupEstimatedBalance() {
+  if (!currentTopupCust) return;
+  const currentBal = Number(currentTopupCust.balance || 0);
+  const amt = Number(document.getElementById('topupAmount')?.value) || 0;
+  const isDeduct = document.querySelector('#topupBalanceModal input[name="action_type"]:checked')?.value === 'deduct';
+  const helpEl = document.getElementById('topupEstimateHelp');
+  if (!helpEl) return;
+  
+  if (amt <= 0) {
+    helpEl.textContent = '';
+    return;
+  }
+  
+  const finalBal = isDeduct ? Math.max(0, currentBal - amt) : (currentBal + amt);
+  helpEl.innerHTML = `Estimasi saldo akhir: <strong style="color:${isDeduct ? '#ef4444' : '#10b981'}">Rp ${finalBal.toLocaleString('id-ID')}</strong>`;
+}
+
+function updateTopupActionUI() {
+  const isDeduct = document.querySelector('#topupBalanceModal input[name="action_type"]:checked')?.value === 'deduct';
+  const submitBtn = document.getElementById('topupSubmitBtn');
+  const noteInput = document.getElementById('topupNote');
+  if (isDeduct) {
+    if (submitBtn) {
+      submitBtn.className = 'btn btn-d';
+      submitBtn.innerHTML = '<i class="bi bi-dash-circle"></i> Potong Saldo';
+    }
+    if (noteInput && !noteInput.value) {
+      noteInput.placeholder = 'Alasan / keterangan pemotongan saldo';
+    }
+  } else {
+    if (submitBtn) {
+      submitBtn.className = 'btn btn-s';
+      submitBtn.innerHTML = '<i class="bi bi-check-lg"></i> Proses Top-Up';
+    }
+    if (noteInput && !noteInput.value) {
+      noteInput.placeholder = 'Contoh: Setor Tunai di Loket Kasir, Refund, dll.';
+    }
+  }
+  updateTopupEstimatedBalance();
+}
+
+window.openTopupModal = openTopupModal;
+window.openTopupFromDetail = openTopupFromDetail;
+window.setTopupNominal = setTopupNominal;
+window.updateTopupActionUI = updateTopupActionUI;
+window.updateTopupEstimatedBalance = updateTopupEstimatedBalance;
 
 function toRupiah(n) {
   const v = Number(n) || 0;
@@ -1777,6 +1972,85 @@ async function loadMikrotikProfiles(routerId = '') {
 }
 loadRouterLists('add');
 loadRouterLists('edit');
+
+// ─── MODE SELEKSI PELANGGAN & HAPUS MASSAL ────────────────────────────────
+function getSelectedCustomers() {
+  return Array.from(document.querySelectorAll('.cust_sel:checked')).map(cb => cb.dataset || {});
+}
+
+function updateCustBulkUi() {
+  const list = getSelectedCustomers();
+  const all = document.querySelectorAll('.cust_sel');
+  const countEl = document.getElementById('bulkCount');
+  const delBtn = document.getElementById('bulkDeleteBtn');
+  const allBox = document.getElementById('cust_all');
+  if (countEl) countEl.textContent = `${list.length} dipilih`;
+  if (delBtn) delBtn.disabled = list.length === 0;
+  if (allBox) {
+    allBox.checked = all.length > 0 && list.length === all.length;
+    allBox.indeterminate = list.length > 0 && list.length < all.length;
+  }
+}
+
+document.addEventListener('change', function(e) {
+  if (e.target && e.target.id === 'cust_all') {
+    const checked = Boolean(e.target.checked);
+    document.querySelectorAll('.cust_sel').forEach(cb => { cb.checked = checked; });
+    updateCustBulkUi();
+    return;
+  }
+  if (e.target && e.target.classList && e.target.classList.contains('cust_sel')) {
+    updateCustBulkUi();
+  }
+});
+
+// Shift-klik untuk mencentang satu rentang baris sekaligus
+document.addEventListener('click', function(e) {
+  const box = e.target && e.target.classList && e.target.classList.contains('cust_sel') ? e.target : null;
+  if (!box) return;
+  const all = Array.from(document.querySelectorAll('.cust_sel'));
+  const idx = all.indexOf(box);
+  if (e.shiftKey && window._lastCustIdx != null && window._lastCustIdx !== idx) {
+    const a = Math.min(window._lastCustIdx, idx);
+    const b = Math.max(window._lastCustIdx, idx);
+    for (let i = a; i <= b; i++) all[i].checked = box.checked;
+    updateCustBulkUi();
+  }
+  window._lastCustIdx = idx;
+});
+
+document.getElementById('bulkDeleteBtn')?.addEventListener('click', function() {
+  const selected = getSelectedCustomers();
+  if (selected.length === 0) return;
+
+  const names = selected.map(c => c.name || ('ID ' + c.id));
+  const rincian = '- ' + names.slice(0, 8).join('\n- ') + (names.length > 8 ? ('\n- … dan ' + (names.length - 8) + ' lainnya') : '');
+  const peringatan = 'Hapus ' + selected.length + ' pelanggan berikut?\n\n' + rincian +
+    '\n\nYang dihapus HANYA data di portal, beserta tagihan & tiketnya.\nKoneksi di MikroTik TIDAK disentuh - PPPoE/hotspot pelanggan tetap jalan.\nTindakan ini TIDAK BISA dibatalkan.';
+  if (!confirm(peringatan)) return;
+
+  // Jumlah besar: minta konfirmasi ketik supaya tidak terhapus karena salah pencet.
+  if (selected.length > 5) {
+    const jawab = prompt('Anda menghapus ' + selected.length + ' pelanggan sekaligus.\nKetik HAPUS (huruf besar) untuk melanjutkan:');
+    if (jawab !== 'HAPUS') { alert('Dibatalkan.'); return; }
+  }
+
+  const f = document.getElementById('bulkDeleteForm');
+  if (!f) return;
+  f.innerHTML = '';
+  for (const c of selected) {
+    const id = String(c.id || '').trim();
+    if (!id) continue;
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'customer_ids';
+    input.value = id;
+    f.appendChild(input);
+  }
+  f.submit();
+});
+
+updateCustBulkUi();
 
 setTimeout(()=>document.querySelectorAll('.alert').forEach(a=>a.style.display='none'),4000);
 </script>

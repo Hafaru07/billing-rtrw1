@@ -133,17 +133,54 @@
                 Jalankan pengingat tagihan otomatis (CRON)
               </label>
               <div style="font-size: 11px; color: var(--muted); margin-top: 6px;">
-                Sistem akan mengirim pengingat ke pelanggan yang punya tunggakan pada H-1 sebelum tanggal isolir (isolate_day).
+                Sistem mengirim pengingat ke pelanggan yang punya tunggakan, pada hari-hari yang dicentang di bawah sebelum tanggal isolir (isolate_day).
+              </div>
+
+              <div style="margin-top:12px;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--bg3)">
+                <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:8px">JADWAL PENGINGAT</div>
+                <% const hariIngat = (function(){ const v = getSetting('whatsapp_reminder_days', [1]); return Array.isArray(v) ? v.map(Number) : String(v||'').split(',').map(Number); })(); %>
+                <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center">
+                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                    <input type="checkbox" name="remind_h7" value="1" <%= hariIngat.includes(7) ? 'checked' : '' %>> H-7
+                  </label>
+                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                    <input type="checkbox" name="remind_h5" value="1" <%= hariIngat.includes(5) ? 'checked' : '' %>> H-5
+                  </label>
+                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                    <input type="checkbox" name="remind_h3" value="1" <%= hariIngat.includes(3) ? 'checked' : '' %>> H-3
+                  </label>
+                  <label style="display:flex;align-items:center;gap:8px;opacity:.7">
+                    <input type="checkbox" checked disabled> H-1 <span style="font-size:11px">(selalu dikirim)</span>
+                  </label>
+                </div>
+                <div style="font-size:11px;color:var(--muted);margin-top:8px">
+                  Contoh: pelanggan dengan tanggal isolir 10 dan H-7 aktif akan diingatkan pada tanggal 3, lalu 5, 7, dan 9 sesuai centang.
+                </div>
               </div>
             </div>
           </div>
 
           <div class="form-row" style="margin-bottom: 12px;">
             <div class="fg">
-              <label class="fl">Jeda Antar Pesan (Detik)</label>
+              <label class="fl">Jeda Acak &mdash; minimal (detik)</label>
+              <input class="fc" type="number" name="delay_min" value="<%= getSetting('whatsapp_delay_min', 45) || 45 %>" min="5" max="600">
+            </div>
+            <div class="fg">
+              <label class="fl">maksimal (detik)</label>
+              <input class="fc" type="number" name="delay_max" value="<%= getSetting('whatsapp_delay_max', 100) || 100 %>" min="5" max="600">
+            </div>
+          </div>
+          <div style="font-size: 11px; color: var(--muted); margin: -6px 0 12px;">
+            Jeda tiap pesan diundi acak dalam rentang ini, jadi polanya tidak seragam dan tidak mudah terbaca sebagai bot.
+            Jangan terlalu kecil &mdash; 45&ndash;100 detik adalah rentang yang aman.
+          </div>
+
+          <div class="form-row" style="margin-bottom: 12px;">
+            <div class="fg">
+              <label class="fl">Jeda Broadcast Manual (Detik)</label>
               <input class="fc" type="number" name="delay" value="<%= getSetting('whatsapp_broadcast_delay', 2) %>" min="1" max="60">
               <div style="font-size: 11px; color: var(--muted); margin-top: 6px;">
-                Dipakai untuk pengingat otomatis dan default broadcast.
+                Hanya dipakai sebagai nilai bawaan pada broadcast manual di atas.
               </div>
             </div>
           </div>
@@ -153,7 +190,7 @@
               <label class="fl">Isi Pesan WhatsApp</label>
               <textarea class="fc" name="message" rows="8" required style="width: 100%;"><%= autoBillingMsg %></textarea>
               <div style="font-size: 11px; color: var(--muted); margin-top: 6px;">
-                <i class="bi bi-info-circle"></i> Variabel: <b>{{nama}}</b>, <b>{{tagihan}}</b>, <b>{{rincian}}</b>, <b>{{paket}}</b>, <b>{{link}}</b> (link login otomatis).
+                <i class="bi bi-info-circle"></i> Variabel: <b>{{nama}}</b>, <b>{{tagihan}}</b>, <b>{{rincian}}</b>, <b>{{paket}}</b>, <b>{{link}}</b> (link login otomatis), <b>{{h-}}</b> &rarr; otomatis jadi <i>(7 Hari Sebelum)</i>, <i>(5 Hari Sebelum)</i>, dst. sesuai jadwal yang sedang berjalan.
               </div>
             </div>
           </div>
@@ -164,10 +201,84 @@
       </form>
     </div>
 
+    <!-- Panel uji coba pesan pengingat -->
+    <div class="card" style="margin-top: 20px;">
+      <div class="card-hd"><h6><i class="bi bi-send-check"></i> Uji Coba Pesan Pengingat</h6></div>
+      <div class="card-bd">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
+          Kirim satu pesan ke nomor Anda sendiri memakai template di atas, untuk memastikan formatnya sudah benar.
+          Data tagihan pada pesan uji hanya contoh &mdash; tidak mengambil data pelanggan mana pun.
+        </div>
+        <div class="form-row">
+          <div class="fg">
+            <label class="fl">Nomor WhatsApp Tujuan</label>
+            <input class="fc" id="tr_phone" placeholder="6281234567890 atau 081234567890">
+          </div>
+          <div class="fg">
+            <label class="fl">Kirim sebagai</label>
+            <select class="fs" id="tr_h">
+              <option value="7">H-7 &rarr; (7 Hari Sebelum)</option>
+              <option value="5">H-5 &rarr; (5 Hari Sebelum)</option>
+              <option value="3">H-3 &rarr; (3 Hari Sebelum)</option>
+              <option value="1" selected>H-1 &rarr; (1 Hari Sebelum)</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="fg" style="width:100%">
+            <label class="fl">Nama pada pesan uji</label>
+            <input class="fc" id="tr_nama" value="Pelanggan Uji">
+          </div>
+        </div>
+        <pre id="tr_preview" style="display:none;white-space:pre-wrap;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px;font-size:12px;margin-top:10px"></pre>
+        <div id="tr_info" style="font-size:12px;margin-top:10px"></div>
+      </div>
+      <div class="card-bd" style="border-top:1px solid var(--border);background:var(--bg2);display:flex;justify-content:flex-end;gap:8px">
+        <button type="button" class="btn btn-g" onclick="ujiPengingat(true)"><i class="bi bi-eye"></i> Pratinjau Saja</button>
+        <button type="button" class="btn btn-p" onclick="ujiPengingat(false)"><i class="bi bi-whatsapp"></i> Kirim Pesan Uji</button>
+      </div>
+    </div>
+
   </div>
 </div>
 
-<script>
+<script>
+// Uji coba pesan pengingat. preview=true hanya menampilkan hasil, tidak mengirim.
+async function ujiPengingat(preview) {
+  const info = document.getElementById('tr_info');
+  const pre = document.getElementById('tr_preview');
+  const phone = document.getElementById('tr_phone').value.trim();
+
+  if (!preview) {
+    if (!phone) { info.innerHTML = '<span style="color:var(--danger)">Nomor tujuan belum diisi.</span>'; return; }
+    if (!confirm('Kirim pesan uji ke ' + phone + ' sekarang?')) return;
+  }
+
+  info.textContent = preview ? 'Menyusun pratinjau...' : 'Mengirim...';
+  try {
+    const res = await fetch('/admin/api/whatsapp/test-reminder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({
+        phone: phone || '628000000000',
+        h_minus: document.getElementById('tr_h').value,
+        nama: document.getElementById('tr_nama').value,
+        preview_only: !!preview
+      })
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+
+    pre.style.display = 'block';
+    pre.textContent = data.message;
+    info.innerHTML = preview
+      ? '<span style="color:var(--muted)">Pratinjau saja - tidak ada pesan yang dikirim.</span>'
+      : '<span style="color:var(--success)">Terkirim ke ' + data.phone + '.</span>';
+  } catch (e) {
+    info.innerHTML = '<span style="color:var(--danger)">Gagal: ' + e.message + '</span>';
+  }
+}
+
 const I18N = {
   confirmChangeTarget: "<%= t('admin.broadcast.confirm_change_target', 'Ganti target penerima? Pesan yang sudah Anda ketik akan ditimpa dengan template baru.') %>",
   sendingText: "<%= t('admin.broadcast.sending_btn', 'Sedang Mengirim...') %>",

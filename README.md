@@ -224,7 +224,7 @@ Port mengikuti **`server_port`** di `settings.json` (default **3001**). Ganti `[
 | Agen | `http://[IP-SERVER]:3001/agent/login` |
 | Kolektor | `http://[IP-SERVER]:3001/collector/login` |
 | Health check | `http://[IP-SERVER]:3001/health` |
-| **Download APK Android** | `http://[IP-SERVER]:3001/downloads/AlijayaCustomer.apk` |
+| **Download APK Android** | `http://[IP-SERVER]:3001/downloads/billing-rtrw.apk` |
 
 Kredensial admin **awal** biasanya sesuai `admin_username` / `admin_password` di `settings.json` (contoh bawaan sering `admin` / `admin123`) — **wajib diganti** sebelum dipakai publik.
 
@@ -238,11 +238,11 @@ Aplikasi Android resmi **Alijaya** adalah aplikasi native multifungsi untuk semu
 1. **Langsung dari Web Server**:
    Akses link berikut melalui browser di smartphone Anda:
    ```text
-   http://[IP-SERVER]:3001/downloads/AlijayaCustomer.apk
+   https://app.alijaya.com/downloads/billing-rtrw.apk
    ```
    *(Ganti `[IP-SERVER]` dan `3001` sesuai IP/Domain dan Port server billing Anda)*.
 2. **File Lokal di Repository**:
-   File APK siap install juga tersedia di root proyek: `AlijayaCustomer.apk` atau `public/downloads/AlijayaCustomer.apk`.
+   File APK siap install juga tersedia di root proyek: `billing-rtrw.apk` atau `public/downloads/billing-rtrw.apk`.
 
 ---
 

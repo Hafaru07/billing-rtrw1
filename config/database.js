@@ -259,6 +259,35 @@ db.exec(`
     created_at DATETIME DEFAULT (NOW_LOCAL())
   );
 
+  -- Objek infrastruktur di peta jaringan: Server, ODC/OTB, dan Tiang.
+  -- ODP tetap memakai tabel odps sendiri karena sudah dipakai modul lain.
+  CREATE TABLE IF NOT EXISTS network_nodes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL,                 -- server | odc | otb | pole
+    name TEXT NOT NULL,
+    lat TEXT DEFAULT '',
+    lng TEXT DEFAULT '',
+    parent_kind TEXT DEFAULT '',        -- node | odp  (tipe induk)
+    parent_id INTEGER,                  -- id induk di tabel network_nodes / odps
+    capacity INTEGER DEFAULT 0,
+    description TEXT DEFAULT '',
+    is_active INTEGER DEFAULT 1,
+    created_at DATETIME DEFAULT (NOW_LOCAL())
+  );
+
+  -- Jalur yang digambar manual di peta (antar tiang, backbone, dsb).
+  CREATE TABLE IF NOT EXISTS network_lines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT DEFAULT '',
+    type TEXT NOT NULL DEFAULT 'custom', -- server | odc | pole | custom
+    path TEXT NOT NULL,                   -- JSON: [[lat,lng], ...]
+    color TEXT DEFAULT '',               -- kosong = pakai warna bawaan tipe
+    from_node_id INTEGER,
+    to_node_id INTEGER,
+    description TEXT DEFAULT '',
+    created_at DATETIME DEFAULT (NOW_LOCAL())
+  );
+
   CREATE TABLE IF NOT EXISTS voucher_batches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     router_id INTEGER REFERENCES routers(id) ON DELETE SET NULL,
@@ -336,6 +365,7 @@ db.exec(`
     status TEXT DEFAULT 'pending', 
     paid_at DATETIME,
     fulfilled_at DATETIME,
+    digi_ref_id TEXT DEFAULT '',
     digi_trx_id TEXT DEFAULT '',
     digi_sn TEXT DEFAULT '',
     digi_message TEXT DEFAULT '',
@@ -736,6 +766,14 @@ try {
   db.exec("ALTER TABLE collectors ADD COLUMN auto_approve INTEGER DEFAULT 0");
 } catch (e) { /* ignore if already exists */ }
 try { db.exec("ALTER TABLE odps ADD COLUMN port_capacity INTEGER NOT NULL DEFAULT 16"); } catch (e) { /* ignore if already exists */ }
+try { db.exec("ALTER TABLE odps ADD COLUMN parent_node_id INTEGER REFERENCES network_nodes(id) ON DELETE SET NULL"); } catch (e) { /* ignore if already exists */ }
+// Jalur kabel bergelombang per objek peta (JSON [[lat,lng], ...]), seperti customers.cable_path
+try { db.exec("ALTER TABLE odps ADD COLUMN cable_path TEXT"); } catch (e) { /* ignore if already exists */ }
+try { db.exec("ALTER TABLE network_nodes ADD COLUMN cable_path TEXT"); } catch (e) { /* ignore if already exists */ }
+// ODP boleh menempel ke ODP lain (kaskade), selain ke ODC/OTB/tiang
+try { db.exec("ALTER TABLE odps ADD COLUMN parent_odp_id INTEGER REFERENCES odps(id) ON DELETE SET NULL"); } catch (e) { /* ignore if already exists */ }
+// Tiang: 1 = boleh dipasangi ODP (ikon biru), 0 = tiang distribusi/kabel saja
+try { db.exec("ALTER TABLE network_nodes ADD COLUMN can_host_odp INTEGER DEFAULT 0"); } catch (e) { /* ignore if already exists */ }
 
 // Kolom untuk PPN & ULO/USO pada tabel packages
 try { db.exec("ALTER TABLE packages ADD COLUMN use_ppn INTEGER DEFAULT 0"); } catch (e) {}
@@ -803,9 +841,11 @@ try { db.exec("ALTER TABLE agent_transactions ADD COLUMN digi_sn TEXT DEFAULT ''
 try { db.exec("ALTER TABLE agent_transactions ADD COLUMN digi_status TEXT DEFAULT ''"); } catch (e) {}
 try { db.exec("ALTER TABLE agent_transactions ADD COLUMN digi_message TEXT DEFAULT ''"); } catch (e) {}
 try { db.exec("ALTER TABLE agent_transactions ADD COLUMN digi_price INTEGER NOT NULL DEFAULT 0"); } catch (e) {}
-try { db.exec("ALTER TABLE agent_transactions ADD COLUMN digi_refunded INTEGER NOT NULL DEFAULT 0"); } catch (e) {}
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_agent_tx_digi_ref ON agent_transactions(digi_ref_id)"); } catch (e) {}
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_agent_tx_type ON agent_transactions(type)"); } catch (e) {}
+try { db.exec("ALTER TABLE public_ppob_orders ADD COLUMN digi_ref_id TEXT DEFAULT ''"); } catch (e) {}
+try { db.exec("ALTER TABLE public_ppob_orders ADD COLUMN wa_sent INTEGER DEFAULT 0"); } catch (e) {}
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_public_ppob_orders_ref ON public_ppob_orders(digi_ref_id)"); } catch (e) {}
 try { db.exec("ALTER TABLE agents ADD COLUMN router_id INTEGER REFERENCES routers(id) ON DELETE SET NULL"); } catch (e) {}
 
 // Kolom untuk Dynamic Speed & FUP di tabel packages

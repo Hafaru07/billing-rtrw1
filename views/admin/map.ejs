@@ -391,6 +391,47 @@
     .btn-wa { background: #25D366; border: 1px solid #25D366; color: #0b1220 !important; font-weight: 800; }
     .btn-wa:hover { background: #1fb85a; border-color: #1fb85a; color: #0b1220 !important; }
 
+    /* Marker objek infrastruktur (Server / ODC / OTB / Tiang) */
+    .net-node-node { position: relative; display: flex; flex-direction: column; align-items: center; }
+    .net-node-pin {
+      width: 30px; height: 30px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
+      font-size: 15px; border: 2px solid rgba(255,255,255,.9); box-shadow: 0 3px 10px rgba(0,0,0,.45);
+    }
+    .net-node-pin.t-server { background: #a855f7; color: #fff; }
+    .net-node-pin.t-odc    { background: #3b82f6; color: #fff; }
+    .net-node-pin.t-otb    { background: #0ea5e9; color: #fff; }
+    .net-node-pin.t-pole   { background: #e2e8f0; color: #0f172a; border-radius: 50%; width: 22px; height: 22px; font-size: 12px; }
+    /* Tiang yang boleh dipasangi ODP ditandai biru */
+    .net-node-pin.t-pole.can-odp { background: #3b82f6; color: #fff; }
+
+    /* Toggle pada modal objek tiang */
+    .nn-toggle { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg3); }
+    .nn-toggle input { width: 42px; height: 22px; cursor: pointer; accent-color: #3b82f6; flex-shrink: 0; }
+    .nn-toggle label { margin: 0; cursor: pointer; font-size: 13px; }
+    .net-node-label {
+      margin-top: 3px; font-size: 10px; font-weight: 800; color: #fff; white-space: nowrap;
+      text-shadow: -1px -1px 0 #0f172a, 1px -1px 0 #0f172a, -1px 1px 0 #0f172a, 1px 1px 0 #0f172a;
+    }
+    .labels-hidden .net-node-label { display: none; }
+
+    /* Bilah mode: menaruh objek / menggambar jalur */
+    .map-mode-bar {
+      position: absolute; left: 50%; transform: translateX(-50%); top: 74px; z-index: 1200;
+      display: none; align-items: center; gap: 10px; padding: 9px 14px; border-radius: 12px;
+      background: rgba(15,23,42,.95); color: #e2e8f0; border: 1px solid rgba(148,163,184,.3);
+      box-shadow: 0 8px 24px rgba(0,0,0,.4); font-size: 12px; font-weight: 700;
+    }
+    .map-mode-bar.show { display: flex; }
+    .map-mode-bar .btn { padding: 4px 10px; font-size: 11px; }
+    #map.map-draw-cursor { cursor: crosshair; }
+
+    /* Legenda warna garis */
+    .map-line-legend {
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      padding: 6px 10px; border-radius: 10px; background: var(--bg3); font-size: 11px; color: var(--muted);
+    }
+    .map-line-legend i { display: inline-block; width: 16px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
+
     /* Flowing line animation for cable paths */
     @keyframes flow {
       from { stroke-dashoffset: 20; }
@@ -557,7 +598,11 @@
       <i class="bi bi-map"></i>
       <span><%= title %></span>
     </div>
-    <div class="tb-right">
+    <div class="tb-right" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+      <button class="btn btn-g btn-sm" onclick="startPlaceNode('server')" title="Tambah Server"><i class="bi bi-hdd-rack-fill" style="color:#a855f7"></i> Server</button>
+      <button class="btn btn-g btn-sm" onclick="startPlaceNode('odc')" title="Tambah ODC"><i class="bi bi-safe2-fill" style="color:#3b82f6"></i> ODC</button>
+      <button class="btn btn-g btn-sm" onclick="startPlaceNode('otb')" title="Tambah OTB"><i class="bi bi-box-fill" style="color:#0ea5e9"></i> OTB</button>
+      <button class="btn btn-g btn-sm" onclick="startPlaceNode('pole')" title="Tambah Tiang"><i class="bi bi-broadcast-pin"></i> Tiang</button>
       <button class="btn btn-p btn-sm" onclick="openModal('addOdpModal')"><i class="bi bi-plus-circle"></i> <%= t('admin.map.add_odp', 'Tambah ODP') %></button>
     </div>
   </div>
@@ -639,6 +684,15 @@
         <button type="button" class="map-pill-btn" onclick="fitAllMarkers()" title="Pusatkan peta ke semua titik">
           <i class="bi bi-arrows-fullscreen"></i> Fit Peta
         </button>
+      </div>
+
+      <div class="map-line-legend">
+        <span><i style="background:#a855f7"></i> Server</span>
+        <span><i style="background:#3b82f6"></i> ODC/ODP</span>
+        <span><i style="background:#22d3ee"></i> Antar tiang</span>
+        <span><i style="background:#22c55e"></i> Client &ge; -22 dBm</span>
+        <span><i style="background:#eab308"></i> Client -23 s/d -30 dBm</span>
+        <span><i style="background:#94a3b8"></i> Redaman belum terbaca</span>
       </div>
     </div>
 
@@ -816,6 +870,49 @@
   </div>
 </div>
 
+<!-- Modal Objek Infrastruktur (Server / ODC / OTB / Tiang) -->
+<div class="mo" id="netNodeModal">
+  <div class="mb">
+    <div class="mh"><span class="mt" id="netNodeTitle">Tambah Objek</span><button type="button" class="mc" onclick="closeModal('netNodeModal')">&times;</button></div>
+    <div class="mbody">
+      <input type="hidden" id="nn_id">
+      <input type="hidden" id="nn_type">
+      <div class="fg"><label class="fl">Nama</label><input type="text" id="nn_name" class="fc" placeholder="Contoh: ODC-01 / Tiang-12"></div>
+
+      <label class="fl">Pilih Lokasi di Peta</label>
+      <div id="nn-picker-map" style="height:300px;width:100%;border-radius:8px;margin-bottom:12px"></div>
+      <p class="text-muted" style="font-size:11px;margin-top:-6px">*Klik peta atau geser marker untuk menentukan titik.</p>
+
+      <div class="form-row">
+        <div class="fg"><label class="fl">Latitude</label><input type="text" id="nn_lat" class="fc"></div>
+        <div class="fg"><label class="fl">Longitude</label><input type="text" id="nn_lng" class="fc"></div>
+      </div>
+      <div class="form-row">
+        <div class="fg">
+          <label class="fl">Terhubung ke (induk)</label>
+          <select id="nn_parent" class="fs"><option value="">-- Tanpa induk --</option></select>
+          <div class="text-muted" style="font-size:11px;margin-top:4px">Garis otomatis ditarik ke induk: ke Server = ungu, ke ODC/OTB = biru, antar tiang = putih.</div>
+        </div>
+        <div class="fg" id="nn_capacity_wrap"><label class="fl">Kapasitas port (opsional)</label><input type="number" id="nn_capacity" class="fc" min="0" placeholder="0"></div>
+        <div class="fg" id="nn_hostodp_wrap" style="display:none">
+          <label class="fl">Fungsi Tiang</label>
+          <div class="nn-toggle">
+            <input type="checkbox" id="nn_can_host_odp" onchange="onToggleHostOdp()">
+            <label for="nn_can_host_odp">Tiang bisa dipasangi ODP</label>
+          </div>
+          <div class="text-muted" style="font-size:11px;margin-top:4px" id="nn_hostodp_hint"></div>
+        </div>
+      </div>
+      <div class="fg"><label class="fl">Deskripsi</label><textarea id="nn_description" class="fc" rows="2"></textarea></div>
+    </div>
+    <div class="mf">
+      <button type="button" class="btn btn-d" id="nn_delete_btn" onclick="deleteNetNode()" style="display:none"><i class="bi bi-trash"></i> Hapus</button>
+      <button type="button" class="btn btn-g" onclick="closeModal('netNodeModal')">Batal</button>
+      <button type="button" class="btn btn-p" onclick="saveNetNode()"><i class="bi bi-save"></i> Simpan</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal Tambah ODP -->
 <div class="mo" id="addOdpModal">
   <div class="mb">
@@ -832,6 +929,11 @@
             <div class="fg"><label class="fl"><%= t('admin.map.form.lng', 'Longitude') %></label><input type="text" name="lng" id="new_lng" class="fc" placeholder="106.xxx" required></div>
         </div>
         <p class="text-muted" style="font-size: 11px;"><%= t('admin.map.form.tips', '*Tips: Geser marker atau klik pada peta untuk menentukan posisi presisi') %></p>
+        <div class="fg">
+          <label class="fl">Terhubung ke (ODC / OTB / Tiang / ODP lain)</label>
+          <select name="parent_ref" id="new_odp_parent" class="fs"><option value="">-- Tanpa induk --</option></select>
+          <div class="text-muted" style="font-size:11px;margin-top:4px">Dipakai untuk menarik garis otomatis ODC &rarr; ODP (biru) atau tiang &rarr; ODP (putih).</div>
+        </div>
         <div class="fg"><label class="fl"><%= t('admin.map.form.description', 'Deskripsi') %></label><textarea name="description" class="fc" rows="2"></textarea></div>
       </div>
       <div class="mf">
@@ -856,6 +958,10 @@
         <div class="form-row">
             <div class="fg"><label class="fl"><%= t('admin.map.form.lat', 'Latitude') %></label><input type="text" name="lat" id="e_odp_lat" class="fc" required></div>
             <div class="fg"><label class="fl"><%= t('admin.map.form.lng', 'Longitude') %></label><input type="text" name="lng" id="e_odp_lng" class="fc" required></div>
+        </div>
+        <div class="fg">
+          <label class="fl">Terhubung ke (ODC / OTB / Tiang / ODP lain)</label>
+          <select name="parent_ref" id="e_odp_parent" class="fs"><option value="">-- Tanpa induk --</option></select>
         </div>
         <div class="fg"><label class="fl"><%= t('admin.map.form.description', 'Deskripsi') %></label><textarea name="description" id="e_odp_description" class="fc" rows="2"></textarea></div>
       </div>
@@ -889,6 +995,8 @@
 <script id="settings-data" type="application/json"><%- JSON.stringify(settings) %></script>
 <script id="customers-data" type="application/json"><%- JSON.stringify(customers).replace(/<\/script/g, '<\\/script').replace(/<!--/g, '<\\!--') %></script>
 <script id="odps-data" type="application/json"><%- JSON.stringify(odps).replace(/<\/script/g, '<\\/script').replace(/<!--/g, '<\\!--') %></script>
+<script id="netnodes-data" type="application/json"><%- JSON.stringify(typeof netNodes !== 'undefined' ? netNodes : []) %></script>
+<script id="linecolors-data" type="application/json"><%- JSON.stringify(typeof lineColors !== 'undefined' ? lineColors : {}) %></script>
 
 <script>
   const I18N = {
@@ -921,10 +1029,13 @@
     lng: parseFloat(appSettings.office_lng) || 106.816666
   };
 
+  // Zoom bawaan saat halaman dibuka, dipusatkan ke koordinat kantor di pengaturan.
+  const DEFAULT_ZOOM = 18;
+
   // Initialize Map
   const map = L.map('map', {
     editable: true
-  }).setView([officeCoords.lat, officeCoords.lng], 13);
+  }).setView([officeCoords.lat, officeCoords.lng], DEFAULT_ZOOM);
 
   let currentEditingPolyline = null;
   let currentEditingCustomer = null;
@@ -997,6 +1108,7 @@
           <div><strong>${I18N.popupLocation}:</strong> ${lat.toFixed(6)}, ${lng.toFixed(6)}</div>
           <div class="popup-actions" style="margin-top: 10px;">
             <button class="btn btn-sm btn-p" onclick='editOdp(${JSON.stringify(odp)})'><i class="bi bi-pencil me-1"></i>${I18N.popupEdit}</button>
+            ${(odp.parent_node_id || odp.parent_odp_id) ? `<button class="btn btn-sm btn-g" onclick="startOdpCableDrawing(${odp.id})"><i class="bi bi-bezier2 me-1"></i>Gambar Jalur</button>` : ''}
           </div>
         </div>
       `);
@@ -1030,10 +1142,11 @@
           } catch(e) {}
         }
 
+        // Warna awal abu-abu (redaman belum terbaca); diperbarui refreshClientRxColors()
         polyline = L.polyline(pathCoords, {
-          color: is_active ? '#3b82f6' : '#ef4444',
+          color: is_active ? '#94a3b8' : '#ef4444',
           weight: 3,
-          opacity: 0.8,
+          opacity: 0.85,
           dashArray: '10, 10',
           className: 'flowing-line'
         }).addTo(map);
@@ -1437,7 +1550,7 @@
       const group = L.featureGroup(allLayers);
       map.fitBounds(group.getBounds().pad(0.1));
     } else {
-      map.setView([officeCoords.lat, officeCoords.lng], 13);
+      map.setView([officeCoords.lat, officeCoords.lng], DEFAULT_ZOOM);
     }
   }
 
@@ -1549,10 +1662,14 @@
     });
   }
 
+  // Sasaran editor jalur saat ini: pelanggan, objek infrastruktur, atau ODP.
+  let cableTarget = { kind: 'customer', id: null };
+
   function startCableDrawing(customerId, lat, lng, odpId) {
     const odp = odpMap[odpId];
     if (!odp) return alert('Data ODP tidak ditemukan atau belum dipilih');
 
+    cableTarget = { kind: 'customer', id: customerId };
     currentEditingCustomer = customerId;
     openModal('cablePathModal');
 
@@ -1591,6 +1708,65 @@
     }, 600);
   }
 
+  // Editor jalur untuk objek infrastruktur (Server/ODC/OTB/Tiang) menuju induknya.
+  function startNodeCableDrawing(nodeId) {
+    const entry = nodeMap[nodeId];
+    if (!entry) return alert('Objek tidak ditemukan');
+    const parent = resolveParent(entry.data.parent_kind, entry.data.parent_id);
+    if (!parent) return alert('Objek ini belum punya induk. Set induknya dulu lewat Edit.');
+
+    cableTarget = { kind: 'node', id: nodeId };
+    currentEditingCustomer = null;
+    openCableEditor(entry.coord, parent.entry.coord, entry.data.cable_path);
+  }
+
+  // Editor jalur untuk ODP menuju induknya (ODC / OTB / tiang).
+  function startOdpCableDrawing(odpId) {
+    const box = odpMap[odpId];
+    if (!box) return alert('ODP tidak ditemukan');
+    const parent = odpParent(box.data);
+    if (!parent) return alert('ODP ini belum punya induk. Set induknya dulu lewat Edit.');
+
+    cableTarget = { kind: 'odp', id: odpId };
+    currentEditingCustomer = null;
+    openCableEditor(box.coord, parent.entry.coord, box.data.cable_path);
+  }
+
+  // Membuka modal editor jalur yang sama dengan milik pelanggan,
+  // lengkap dengan titik oranye yang bisa digeser dan tombol Tambah Titik Lekukan.
+  function openCableEditor(fromCoord, toCoord, existingPath) {
+    openModal('cablePathModal');
+    setTimeout(function () {
+      try {
+        if (drawingMap) drawingMap.remove();
+        drawingMap = L.map('cable-drawing-map').setView(fromCoord, 17);
+        L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
+          maxZoom: 20, subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
+        }).addTo(drawingMap);
+
+        let pathCoords = [];
+        if (existingPath) {
+          try { pathCoords = JSON.parse(existingPath); } catch (e) {}
+        }
+        if (!Array.isArray(pathCoords) || pathCoords.length <= 2) {
+          pathCoords = interpolatePoints(fromCoord, toCoord, 5);
+        }
+
+        drawingPolyline = L.polyline(pathCoords, {
+          color: '#f59e0b', weight: 6, dashArray: '5, 5', interactive: false
+        }).addTo(drawingMap);
+
+        renderEditorMarkers();
+        setTimeout(function () {
+          drawingMap.invalidateSize();
+          drawingMap.fitBounds(drawingPolyline.getBounds(), { padding: [50, 50] });
+        }, 200);
+      } catch (err) {
+        console.error('Cable editor error:', err);
+      }
+    }, 600);
+  }
+
   function addMorePoints() {
     if (!drawingPolyline || !drawingMap) return;
     const latlngs = drawingPolyline.getLatLngs();
@@ -1607,28 +1783,33 @@
   }
 
   async function saveCablePath() {
-    if (!drawingPolyline || !currentEditingCustomer) return;
-    const latlngs = drawingPolyline.getLatLngs().map(ll => [ll.lat, ll.lng]);
+    if (!drawingPolyline) return;
+    const latlngs = drawingPolyline.getLatLngs().map(function (ll) { return [ll.lat, ll.lng]; });
     const pathJson = JSON.stringify(latlngs);
 
+    // Endpoint berbeda sesuai jenis objek, tapi bentuk datanya sama.
+    let url = null;
+    if (cableTarget.kind === 'customer' && currentEditingCustomer) {
+      url = '/admin/api/customers/' + currentEditingCustomer + '/cable-path';
+    } else if (cableTarget.kind === 'node') {
+      url = '/admin/api/map/nodes/' + cableTarget.id;
+    } else if (cableTarget.kind === 'odp') {
+      url = '/admin/api/map/odps/' + cableTarget.id + '/cable-path';
+    }
+    if (!url) return alert('Sasaran jalur tidak dikenali.');
+
     try {
-      const res = await fetch(`/admin/api/customers/${currentEditingCustomer}/cable-path`, {
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify({ path: pathJson })
+        body: JSON.stringify(cableTarget.kind === 'node' ? { cable_path: pathJson } : { path: pathJson })
       });
-      
-      const contentType = res.headers.get("content-type");
-      if (contentType && contentType.indexOf("application/json") !== -1) {
-        const data = await res.json();
-        if (data.ok) {
-          alert('Jalur kabel berhasil disimpan!');
-          location.reload();
-        } else {
-          alert('Gagal menyimpan: ' + data.error);
-        }
+      const data = await res.json();
+      if (res.ok && data.ok !== false) {
+        alert('Jalur kabel berhasil disimpan!');
+        location.reload();
       } else {
-        alert('Gagal menyimpan jalur kabel.');
+        alert('Gagal menyimpan: ' + (data.error || res.status));
       }
     } catch (e) {
       alert('Error: ' + e.message);
@@ -1724,6 +1905,7 @@
     document.getElementById('e_odp_lat').value = odp.lat;
     document.getElementById('e_odp_lng').value = odp.lng;
     document.getElementById('e_odp_description').value = odp.description || '';
+    fillOdpParentOptions('e_odp_parent', odp.id, odp.parent_odp_id ? ('odp:' + odp.parent_odp_id) : (odp.parent_node_id ? ('node:' + odp.parent_node_id) : ''));
     openModal('editOdpModal');
     initEditPickerMap(odp.lat, odp.lng);
   }
@@ -1754,9 +1936,10 @@
     openModal('addOdpModal');
   });
 
-  // Fit all initial markers
+  // Saat dibuka: pusatkan ke koordinat kantor pada zoom bawaan.
+  // (Tombol "Fit Peta" tetap tersedia untuk melihat semua titik sekaligus.)
   setTimeout(() => {
-    fitAllMarkers();
+    map.setView([officeCoords.lat, officeCoords.lng], DEFAULT_ZOOM);
     map.invalidateSize();
   }, 500);
 
@@ -1929,6 +2112,403 @@
     if (!to) return 'javascript:void(0)';
     return `https://wa.me/${to}?text=${encodeURIComponent(msg)}`;
   }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  //  OBJEK INFRASTRUKTUR (SERVER / ODC / OTB / TIANG) & JALUR KABEL
+  //  Semua operasi di sini hanya menyentuh database peta lewat /admin/api/map/*.
+  //  Tidak ada yang menyentuh MikroTik maupun GenieACS.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  const NODE_META = {
+    server: { label: 'Server', icon: 'bi-hdd-rack-fill', color: '#a855f7' },
+    odc:    { label: 'ODC',    icon: 'bi-safe2-fill',    color: '#3b82f6' },
+    otb:    { label: 'OTB',    icon: 'bi-box-fill',      color: '#0ea5e9' },
+    pole:   { label: 'Tiang',  icon: 'bi-broadcast-pin', color: '#e2e8f0' }
+  };
+
+  // Halaman ini belum punya helper parse JSON, jadi disediakan di sini.
+  // Tanpa ini seluruh script berhenti dengan ReferenceError dan semua tombol mati.
+  function parseJsonTag(elementId, fallback) {
+    try {
+      const el = document.getElementById(elementId);
+      if (!el || !el.textContent || !el.textContent.trim()) return fallback;
+      return JSON.parse(el.textContent);
+    } catch (e) {
+      console.warn('Gagal membaca data ' + elementId, e);
+      return fallback;
+    }
+  }
+
+  const LINE_COLORS = Object.assign({
+    server: '#a855f7', odc: '#3b82f6', pole: '#22d3ee', custom: '#f59e0b',
+    client_good: '#22c55e', client_warn: '#eab308', client_unknown: '#94a3b8', client_down: '#ef4444'
+  }, parseJsonTag('linecolors-data', {}));
+
+  let netNodes = parseJsonTag('netnodes-data', []);
+
+  const nodeMap = {};      // nodeId -> { marker, data, coord }
+  let autoLineLayers = []; // garis otomatis dari relasi induk-anak
+
+
+  function nodeCoord(node) {
+    const lat = parseFloat(node.lat), lng = parseFloat(node.lng);
+    return (Number.isFinite(lat) && Number.isFinite(lng)) ? [lat, lng] : null;
+  }
+
+  function renderNetNode(node) {
+    const coord = nodeCoord(node);
+    if (!coord) return;
+    const meta = NODE_META[node.type] || NODE_META.server;
+
+    const icon = L.divIcon({
+      className: 'custom-onu-icon',
+      html: '<div class="net-node-node">' +
+            '<div class="net-node-pin t-' + node.type + (Number(node.can_host_odp) ? ' can-odp' : '') + '" title="' + escapeHtml(node.name) + ' (' + meta.label + (node.type === 'pole' ? (Number(node.can_host_odp) ? ' - bisa dipasangi ODP' : ' - distribusi') : '') + ')">' +
+            '<i class="bi ' + meta.icon + '"></i></div>' +
+            '<div class="net-node-label">' + escapeHtml(node.name) + '</div></div>',
+      iconSize: [30, 30],
+      iconAnchor: [15, 15]
+    });
+
+    // Posisi dikunci di peta utama supaya objek tidak tergeser saat menggeser/zoom peta.
+    // Untuk memindahkannya: buka popup -> Edit, lalu geser marker di peta pemilih.
+    const marker = L.marker(coord, { icon: icon, draggable: false }).addTo(map);
+
+    marker.bindPopup(
+      '<div class="popup-content">' +
+      '<h6 style="font-weight:800;color:#0f172a;margin-bottom:6px"><i class="bi ' + meta.icon + '" style="color:' + meta.color + '"></i> ' + escapeHtml(node.name) + '</h6>' +
+      '<div><strong>Jenis:</strong> ' + meta.label + '</div>' +
+      '<div><strong>Keterangan:</strong> ' + escapeHtml(node.description || '-') + '</div>' +
+      '<div><strong>Koordinat:</strong> ' + coord[0].toFixed(6) + ', ' + coord[1].toFixed(6) + '</div>' +
+      '<div class="popup-actions">' +
+      '<button class="btn btn-sm btn-p" onclick="openNetNodeModal(null, null, null, ' + node.id + ')"><i class="bi bi-pencil me-1"></i>Edit</button>' +
+      (node.parent_id ? '<button class="btn btn-sm btn-g" onclick="startNodeCableDrawing(' + node.id + ')"><i class="bi bi-bezier2 me-1"></i>Gambar Jalur</button>' : '') +
+      '</div></div>'
+    );
+
+    nodeMap[node.id] = { marker: marker, data: node, coord: coord };
+  }
+
+  // Mencari induk sebuah objek: bisa objek lain (node) atau sebuah ODP.
+  function resolveParent(kind, id) {
+    if (!id) return null;
+    if (kind === 'odp') {
+      const entry = odpMap[id];
+      return entry ? { kind: 'odp', entry: entry } : null;
+    }
+    const entry = nodeMap[id];
+    return entry ? { kind: 'node', entry: entry } : null;
+  }
+
+  // Induk sebuah ODP: ODP lain, atau objek ODC/OTB/tiang.
+  function odpParent(odp) {
+    if (odp.parent_odp_id) return resolveParent('odp', odp.parent_odp_id);
+    if (odp.parent_node_id) return resolveParent('node', odp.parent_node_id);
+    return null;
+  }
+
+  // Garis otomatis dari relasi induk-anak: ke Server ungu, ke ODC/OTB biru, antar tiang putih.
+  function redrawAutoLines() {
+    autoLineLayers.forEach(function (l) { if (map.hasLayer(l)) map.removeLayer(l); });
+    autoLineLayers = [];
+
+    // cablePath (JSON titik lekukan) dipakai bila objek sudah digambar jalurnya.
+    function addAuto(a, b, color, weight, cablePath) {
+      if (!a || !b) return;
+      let coords = [a, b];
+      if (cablePath) {
+        try {
+          const parsed = JSON.parse(cablePath);
+          if (Array.isArray(parsed) && parsed.length >= 2) coords = parsed;
+        } catch (e) {}
+      }
+      const poly = L.polyline(coords, {
+        color: color, weight: weight || 4, opacity: 0.9,
+        dashArray: '10, 10', className: 'flowing-line', interactive: false
+      }).addTo(map);
+      autoLineLayers.push(poly);
+    }
+
+    netNodes.forEach(function (node) {
+      if (!node.parent_id) return;
+      const child = nodeMap[node.id];
+      const parent = resolveParent(node.parent_kind, node.parent_id);
+      if (!child || !parent) return;
+      const parentType = parent.kind === 'odp' ? 'odp' : parent.entry.data.type;
+      let color = LINE_COLORS.odc;
+      if (parentType === 'server') color = LINE_COLORS.server;
+      else if (parentType === 'pole' && node.type === 'pole') color = LINE_COLORS.pole;
+      addAuto(child.coord, parent.entry.coord, color, parentType === 'server' ? 5 : 4, node.cable_path);
+    });
+
+    odps.forEach(function (odp) {
+      const parent = odpParent(odp);
+      const box = odpMap[odp.id];
+      if (!box || !parent) return;
+      const color = (parent.kind === 'node' && parent.entry.data.type === 'pole') ? LINE_COLORS.pole : LINE_COLORS.odc;
+      addAuto(box.coord, parent.entry.coord, color, 4, odp.cable_path);
+    });
+  }
+
+  function renderAllNetObjects() {
+    netNodes.forEach(renderNetNode);
+    redrawAutoLines();
+  }
+
+  async function apiPost(url, body) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify(body || {})
+    });
+    let data = {};
+    try { data = await res.json(); } catch (e) {}
+    if (!res.ok || data.ok === false) throw new Error(data.error || ('HTTP ' + res.status));
+    return data;
+  }
+
+  // Menambah objek: langsung buka modal berisi peta pemilih titik,
+  // pola yang sama dengan modal Tambah ODP.
+  function startPlaceNode(type) {
+    openNetNodeModal(type, null, null, null);
+  }
+
+  // Peta pemilih titik di dalam modal objek
+  let nnPickerMap, nnPickerMarker;
+
+  function initNodePickerMap(lat, lng, type) {
+    const meta = NODE_META[type] || NODE_META.server;
+    const icon = L.divIcon({
+      className: 'custom-div-icon',
+      html: '<div class="net-node-pin t-' + (type || 'server') + '"><i class="bi ' + meta.icon + '"></i></div>',
+      iconSize: [30, 30],
+      iconAnchor: [15, 15]
+    });
+
+    const sync = function (pos) {
+      document.getElementById('nn_lat').value = pos.lat.toFixed(6);
+      document.getElementById('nn_lng').value = pos.lng.toFixed(6);
+    };
+
+    if (!nnPickerMap) {
+      nnPickerMap = L.map('nn-picker-map').setView([lat, lng], 17);
+      L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
+        maxZoom: 20, subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
+      }).addTo(nnPickerMap);
+
+      nnPickerMarker = L.marker([lat, lng], { draggable: true, icon: icon }).addTo(nnPickerMap);
+      nnPickerMarker.on('dragend', function () { sync(nnPickerMarker.getLatLng()); });
+      nnPickerMap.on('click', function (e) {
+        nnPickerMarker.setLatLng(e.latlng);
+        sync(e.latlng);
+      });
+    } else {
+      nnPickerMap.setView([lat, lng], 17);
+      nnPickerMarker.setIcon(icon);
+      nnPickerMarker.setLatLng([lat, lng]);
+    }
+
+    sync(L.latLng(lat, lng));
+    setTimeout(function () { nnPickerMap.invalidateSize(); }, 300);
+  }
+
+  // Nilai option memakai format "node:<id>" / "odp:<id>" supaya ODP juga bisa jadi induk.
+  function fillParentOptions(currentId, selectedKind, selectedId) {
+    const sel = document.getElementById('nn_parent');
+    sel.innerHTML = '<option value="">-- Tanpa induk --</option>';
+    const current = (selectedKind && selectedId) ? (selectedKind + ':' + selectedId) : '';
+
+    // Tiang distribusi (toggle OFF): induknya hanya boleh sesama tiang.
+    const tipeNow = document.getElementById('nn_type').value;
+    const toggleEl = document.getElementById('nn_can_host_odp');
+    const hanyaTiang = tipeNow === 'pole' && toggleEl && !toggleEl.checked;
+
+    const add = function (value, label) {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = label;
+      if (value === current) opt.selected = true;
+      sel.appendChild(opt);
+    };
+
+    netNodes.forEach(function (n) {
+      if (String(n.id) === String(currentId)) return; // tidak boleh jadi induk sendiri
+      if (hanyaTiang && n.type !== 'pole') return;
+      const meta = NODE_META[n.type] || NODE_META.server;
+      add('node:' + n.id, meta.label + ' - ' + n.name);
+    });
+
+    if (!hanyaTiang) {
+      odps.forEach(function (o) {
+        add('odp:' + o.id, 'ODP - ' + o.name);
+      });
+    }
+  }
+
+  // Tiang memakai toggle; tipe lain tetap memakai kapasitas port.
+  function applyNodeTypeFields(type) {
+    const isPole = type === 'pole';
+    document.getElementById('nn_capacity_wrap').style.display = isPole ? 'none' : '';
+    document.getElementById('nn_hostodp_wrap').style.display = isPole ? '' : 'none';
+    if (isPole) onToggleHostOdp();
+  }
+
+  // Tiang distribusi (toggle OFF) hanya boleh berinduk ke sesama tiang,
+  // jadi daftar induknya ikut disaring ulang setiap toggle berubah.
+  function onToggleHostOdp() {
+    const on = document.getElementById('nn_can_host_odp').checked;
+    document.getElementById('nn_hostodp_hint').textContent = on
+      ? 'Ikon tiang jadi biru dan ODP boleh menempel ke tiang ini.'
+      : 'Tiang distribusi/kabel: tidak muncul sebagai pilihan induk ODP, dan hanya bisa berinduk ke sesama tiang.';
+
+    const idNow = document.getElementById('nn_id').value || null;
+    const sel = document.getElementById('nn_parent');
+    const terpilih = sel.value;
+    const parts = String(terpilih || '').split(':');
+    fillParentOptions(idNow, parts[0] || null, parts[1] || null);
+  }
+
+  function openNetNodeModal(type, lat, lng, id) {
+    const existing = id ? (nodeMap[id] && nodeMap[id].data) : null;
+    const meta = NODE_META[(existing && existing.type) || type] || NODE_META.server;
+
+    document.getElementById('netNodeTitle').textContent = (existing ? 'Edit ' : 'Tambah ') + meta.label;
+    document.getElementById('nn_id').value = existing ? existing.id : '';
+    document.getElementById('nn_type').value = (existing && existing.type) || type || 'server';
+    document.getElementById('nn_name').value = existing ? existing.name : '';
+    document.getElementById('nn_lat').value = existing ? existing.lat : (lat != null ? lat.toFixed(6) : '');
+    document.getElementById('nn_lng').value = existing ? existing.lng : (lng != null ? lng.toFixed(6) : '');
+    document.getElementById('nn_capacity').value = existing ? (existing.capacity || '') : '';
+    document.getElementById('nn_can_host_odp').checked = existing ? !!Number(existing.can_host_odp) : false;
+    applyNodeTypeFields((existing && existing.type) || type || 'server');
+    document.getElementById('nn_description').value = existing ? (existing.description || '') : '';
+    document.getElementById('nn_delete_btn').style.display = existing ? '' : 'none';
+    fillParentOptions(existing ? existing.id : null, existing ? (existing.parent_kind || 'node') : null, existing ? existing.parent_id : null);
+    openModal('netNodeModal');
+
+    // Titik awal peta pemilih: posisi objek, titik yang dikirim, atau pusat peta saat ini.
+    const center = map.getCenter();
+    const startLat = existing ? (parseFloat(existing.lat) || center.lat) : (lat != null ? lat : center.lat);
+    const startLng = existing ? (parseFloat(existing.lng) || center.lng) : (lng != null ? lng : center.lng);
+    setTimeout(function () { initNodePickerMap(startLat, startLng, (existing && existing.type) || type || 'server'); }, 350);
+  }
+
+  async function saveNetNode() {
+    const id = document.getElementById('nn_id').value;
+    const parentVal = document.getElementById('nn_parent').value;
+    const parentParts = String(parentVal || '').split(':');
+    const payload = {
+      type: document.getElementById('nn_type').value,
+      name: document.getElementById('nn_name').value,
+      lat: document.getElementById('nn_lat').value,
+      lng: document.getElementById('nn_lng').value,
+      capacity: document.getElementById('nn_capacity').value || 0,
+      can_host_odp: document.getElementById('nn_can_host_odp').checked ? 1 : 0,
+      description: document.getElementById('nn_description').value,
+      parent_id: parentVal ? parentParts[1] : null,
+      parent_kind: parentVal ? parentParts[0] : ''
+    };
+    if (!String(payload.name || '').trim()) { alert('Nama wajib diisi.'); return; }
+
+    try {
+      if (id) {
+        const data = await apiPost('/admin/api/map/nodes/' + id, payload);
+        const entry = nodeMap[id];
+        if (entry && map.hasLayer(entry.marker)) map.removeLayer(entry.marker);
+        netNodes = netNodes.filter(function (n) { return String(n.id) !== String(id); });
+        netNodes.push(data.node);
+        renderNetNode(data.node);
+      } else {
+        const data = await apiPost('/admin/api/map/nodes', payload);
+        netNodes.push(data.node);
+        renderNetNode(data.node);
+      }
+      redrawAutoLines();
+      closeModal('netNodeModal');
+    } catch (e) {
+      alert('Gagal menyimpan: ' + e.message);
+    }
+  }
+
+  async function deleteNetNode() {
+    const id = document.getElementById('nn_id').value;
+    if (!id) return;
+    if (!confirm('Hapus objek ini dari peta?\n\nHanya data peta yang dihapus. Pelanggan, ODP, dan koneksi MikroTik tidak terpengaruh.')) return;
+    try {
+      await apiPost('/admin/api/map/nodes/' + id + '/delete', {});
+      const entry = nodeMap[id];
+      if (entry && map.hasLayer(entry.marker)) map.removeLayer(entry.marker);
+      delete nodeMap[id];
+      netNodes = netNodes.filter(function (n) { return String(n.id) !== String(id); });
+      redrawAutoLines();
+      closeModal('netNodeModal');
+    } catch (e) {
+      alert('Gagal menghapus: ' + e.message);
+    }
+  }
+
+  // Warna garis client berdasarkan redaman:
+  // >= -22 dBm hijau, -23 s/d -30 kuning, belum terbaca abu-abu, isolir merah.
+  async function refreshClientRxColors() {
+    try {
+      const res = await fetch('/admin/api/map/rxpower', { headers: { 'Accept': 'application/json' } });
+      const data = await res.json();
+      if (!data || !data.rx) return;
+      const threshold = Number(data.threshold != null ? data.threshold : -22);
+
+      Object.keys(customerMap).forEach(function (id) {
+        const entry = customerMap[id];
+        if (!entry || !entry.polyline) return;
+        const isActive = entry.data && entry.data.status === 'active';
+        if (!isActive) return; // pelanggan isolir tetap merah
+
+        const rx = data.rx[id];
+        let color = LINE_COLORS.client_unknown;
+        if (rx !== undefined && rx !== null && Number.isFinite(Number(rx))) {
+          color = Number(rx) >= threshold ? LINE_COLORS.client_good : LINE_COLORS.client_warn;
+          entry.rxPower = Number(rx);
+        }
+        entry.polyline.setStyle({ color: color });
+      });
+    } catch (e) {
+      console.warn('Gagal memuat redaman untuk warna garis:', e);
+    }
+  }
+
+  // Pilihan induk ODP: hanya ODC / OTB / tiang (server tidak langsung ke ODP).
+  // Induk ODP: ODC/OTB/tiang, atau ODP lain (kaskade). Server tidak langsung ke ODP.
+  function fillOdpParentOptions(selectId, currentOdpId, selectedRef) {
+    const sel = document.getElementById(selectId);
+    if (!sel) return;
+    sel.innerHTML = '<option value="">-- Tanpa induk --</option>';
+
+    const add = function (value, label) {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = label;
+      if (value === selectedRef) opt.selected = true;
+      sel.appendChild(opt);
+    };
+
+    netNodes.forEach(function (n) {
+      if (n.type === 'server') return;
+      // Tiang distribusi (toggle OFF) tidak boleh jadi induk ODP.
+      if (n.type === 'pole' && !Number(n.can_host_odp)) return;
+      const meta = NODE_META[n.type] || NODE_META.odc;
+      add('node:' + n.id, meta.label + ' - ' + n.name);
+    });
+
+    odps.forEach(function (o) {
+      if (String(o.id) === String(currentOdpId)) return; // tidak boleh jadi induk sendiri
+      add('odp:' + o.id, 'ODP - ' + o.name);
+    });
+  }
+
+  fillOdpParentOptions('new_odp_parent', null, '');
+  renderAllNetObjects();
+  refreshClientRxColors();
+  setInterval(refreshClientRxColors, 5 * 60 * 1000);
+
 </script>
 </body>
 </html>

@@ -240,6 +240,15 @@
     <form method="POST" action="/admin/billing/generate">
       <div class="mbody">
         <div class="alert alert-i"><i class="bi bi-info-circle"></i> <%= t('admin.billing.generate_hint', 'Tagihan akan dibuat untuk semua pelanggan aktif yang belum memiliki tagihan di periode yang dipilih.') %></div>
+        <div class="text-muted" style="font-size:11px;margin:-6px 0 12px">
+          Biarkan rentang <strong>1&ndash;31</strong> untuk semua pelanggan. Persempit bila ingin generate bertahap per gelombang penagihan.
+          Nominalnya tetap penuh sesuai paket.
+          <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+            <button type="button" class="btn btn-g btn-sm" onclick="setRentangJatuhTempo(1,31)">Semua (1&ndash;31)</button>
+            <button type="button" class="btn btn-g btn-sm" onclick="setRentangJatuhTempo(1,15)">Tgl 1&ndash;15</button>
+            <button type="button" class="btn btn-g btn-sm" onclick="setRentangJatuhTempo(16,31)">Tgl 16&ndash;31</button>
+          </div>
+        </div>
         <div class="form-row">
           <div class="fg">
             <label class="fl"><%= t('admin.billing.month', 'Bulan') %></label>
@@ -257,6 +266,25 @@
             <select class="fs" name="year" required>
               <% for(let y=new Date().getFullYear(); y>=2023; y--){ %>
               <option value="<%= y %>"><%= y %></option>
+              <% } %>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="fg">
+            <label class="fl">Tanggal jatuh tempo &mdash; dari</label>
+            <select class="fs" name="due_from" id="gen_due_from">
+              <% for(let d=1; d<=31; d++){ %>
+              <option value="<%= d %>"><%= d %></option>
+              <% } %>
+            </select>
+          </div>
+          <div class="fg">
+            <label class="fl">sampai</label>
+            <select class="fs" name="due_to" id="gen_due_to">
+              <% for(let d=1; d<=31; d++){ %>
+              <option value="<%= d %>" <%= d===31 ? 'selected' : '' %>><%= d %></option>
               <% } %>
             </select>
           </div>
@@ -381,6 +409,14 @@ document.addEventListener('click', async function(e) {
     form.action = '/admin/billing/' + id + '/pay';
   }
 });
+
+// Pintasan mengisi rentang tanggal jatuh tempo pada modal generate.
+function setRentangJatuhTempo(dari, sampai) {
+  const a = document.getElementById('gen_due_from');
+  const b = document.getElementById('gen_due_to');
+  if (a) a.value = String(dari);
+  if (b) b.value = String(sampai);
+}
 
 function getSelectedInvoices() {
   return Array.from(document.querySelectorAll('.inv_sel:checked')).map(cb => cb.dataset || {});

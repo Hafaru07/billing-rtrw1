@@ -5,6 +5,29 @@ const db = require('../config/database');
  * Mengelola data Optical Distribution Point (ODP)
  */
 
+/**
+ * Menerjemahkan pilihan induk dari form.
+ * parent_ref berformat 'node:<id>' (ODC/OTB/tiang) atau 'odp:<id>' (ODP lain).
+ * Bila form tidak mengirim parent_ref, nilai lama dipertahankan.
+ */
+function resolveParentRef(data, prev) {
+  if (data.parent_ref !== undefined) {
+    const raw = String(data.parent_ref || '').trim();
+    if (!raw) return { node: null, odp: null };
+    const parts = raw.split(':');
+    const id = parseInt(parts[1], 10);
+    if (!Number.isFinite(id) || id <= 0) return { node: null, odp: null };
+    return parts[0] === 'odp' ? { node: null, odp: id } : { node: id, odp: null };
+  }
+  if (data.parent_node_id !== undefined) {
+    return {
+      node: data.parent_node_id ? parseInt(data.parent_node_id, 10) : null,
+      odp: prev ? (prev.parent_odp_id || null) : null
+    };
+  }
+  return prev ? { node: prev.parent_node_id || null, odp: prev.parent_odp_id || null } : { node: null, odp: null };
+}
+
 function getAllOdps() {
   return db.prepare(`
     SELECT o.*, olt.name as olt_name 
@@ -19,9 +42,10 @@ function getOdpById(id) {
 }
 
 function createOdp(data) {
+  const parentCreate = resolveParentRef(data, null);
   const stmt = db.prepare(`
-    INSERT INTO odps (name, olt_id, pon_port, port_capacity, lat, lng, description)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO odps (name, olt_id, pon_port, port_capacity, lat, lng, description, parent_node_id, parent_odp_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   return stmt.run(
     data.name,
@@ -30,14 +54,17 @@ function createOdp(data) {
     data.port_capacity !== undefined && data.port_capacity !== null ? parseInt(data.port_capacity) : 16,
     data.lat || '',
     data.lng || '',
-    data.description || ''
+    data.description || '',
+    parentCreate.node,
+    parentCreate.odp
   );
 }
 
 function updateOdp(id, data) {
+  const parentUpdate = resolveParentRef(data, getOdpById(id));
   const stmt = db.prepare(`
     UPDATE odps 
-    SET name = ?, olt_id = ?, pon_port = ?, port_capacity = ?, lat = ?, lng = ?, description = ?
+    SET name = ?, olt_id = ?, pon_port = ?, port_capacity = ?, lat = ?, lng = ?, description = ?, parent_node_id = ?, parent_odp_id = ?
     WHERE id = ?
   `);
   return stmt.run(
@@ -48,6 +75,8 @@ function updateOdp(id, data) {
     data.lat || '',
     data.lng || '',
     data.description || '',
+    parentUpdate.node,
+    parentUpdate.odp,
     id
   );
 }

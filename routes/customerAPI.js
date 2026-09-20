@@ -149,10 +149,39 @@ function requireCollectorApiAuth(req, res, next) {
   next();
 }
 
+function getResolvedAdminPhone(settings) {
+  const s = settings || getSettingsWithCache();
+  const pickFirst = (val) => {
+    if (!val) return '';
+    if (Array.isArray(val)) {
+      for (const item of val) {
+        const res = pickFirst(item);
+        if (res) return res;
+      }
+      return '';
+    }
+    const str = String(val).trim();
+    if (!str) return '';
+    const parts = str.split(/[,;\/]+/).map(p => p.trim()).filter(Boolean);
+    return parts.length > 0 ? parts[0] : '';
+  };
+
+  const p1 = pickFirst(s.company_phone);
+  if (p1) return p1;
+  const p2 = pickFirst(s.company_whatsapp);
+  if (p2) return p2;
+  const p3 = pickFirst(s.whatsapp_admin_numbers);
+  if (p3) return p3;
+  const p4 = pickFirst(s.admins);
+  if (p4) return p4;
+  return '';
+}
+
 // ─── 0. PING & KONEKTIVITAS MOBILE APP (PUBLIC) ──────────────────────────────
 router.get('/ping', (req, res) => {
   const settings = getSettingsWithCache();
   const ispName = settings.company_header || settings.company_name || settings.isp_name || 'ISP NETWORK';
+  const adminPhone = getResolvedAdminPhone(settings);
   res.json({
     success: true,
     status: 'online',
@@ -160,8 +189,10 @@ router.get('/ping', (req, res) => {
     companyHeader: ispName,
     companyName: ispName,
     companyTagline: settings.company_tagline || settings.footer_info || 'Billing & Hotspot System',
-    companyPhone: settings.company_phone || '',
+    companyPhone: adminPhone,
+    adminPhone: adminPhone,
     companyAddress: settings.company_address || '',
+    logoUrl: settings.company_logo || '/img/logo-billing-rtrw.png',
     appName: ispName,
     version: '1.2.0',
     timestamp: Date.now()
@@ -171,6 +202,7 @@ router.get('/ping', (req, res) => {
 router.get('/info', (req, res) => {
   const settings = getSettingsWithCache();
   const ispName = settings.company_header || settings.company_name || settings.isp_name || 'ISP NETWORK';
+  const adminPhone = getResolvedAdminPhone(settings);
   res.json({
     success: true,
     data: {
@@ -178,9 +210,11 @@ router.get('/info', (req, res) => {
       companyHeader: ispName,
       companyName: ispName,
       companyTagline: settings.company_tagline || settings.footer_info || 'Billing & Hotspot System',
-      companyPhone: settings.company_phone || '',
+      companyPhone: adminPhone,
+      adminPhone: adminPhone,
       companyAddress: settings.company_address || '',
       companyEmail: settings.company_email || '',
+      logoUrl: settings.company_logo || '/img/logo-billing-rtrw.png',
       operationalHours: settings.operational_hours || ''
     }
   });
@@ -257,15 +291,19 @@ router.get('/app/tech-summary', requireTechApiAuth, (req, res) => {
 
 // ─── 0.3 IN-APP AUTO UPDATE ENDPOINT ──────────────────────────────────────────
 router.get('/app/version', (req, res) => {
+  const settings = getSettingsWithCache();
+  const vCode = Number(settings.app_version_code) || 7;
+  const vName = settings.app_version_name || "1.2.5";
+  const notes = settings.app_release_notes || "• Riwayat transaksi pulsa & PPOB di halaman pembelian\n• Nomor WhatsApp admin dinamis otomatis dari server\n• Peningkatan kecepatan & stabilitas koneksi";
   res.json({
     success: true,
     data: {
-      versionCode: 2,
-      versionName: "1.2.0",
-      downloadUrl: "/downloads/AlijayaCustomer.apk",
-      apkFileName: "AlijayaCustomer.apk",
-      releaseNotes: "• Tampilan Barcode QRIS Real-time Dinamis dengan Kode Unik\n• Fitur Pembaruan Otomatis APK Langsung dari Server\n• Peningkatan Responsivitas Navigasi & Formulir Native",
-      forceUpdate: false
+      versionCode: vCode,
+      versionName: vName,
+      downloadUrl: "/downloads/billing-rtrw.apk",
+      apkFileName: "billing-rtrw.apk",
+      releaseNotes: notes,
+      forceUpdate: Boolean(settings.app_force_update)
     }
   });
 });
@@ -334,6 +372,7 @@ router.get('/app/admin/customers', requireAdminApiAuth, (req, res) => {
     const search = String(req.query.search || '').trim();
     let q = `
       SELECT c.id, c.name, c.phone, c.address, c.status, c.pppoe_username, c.isolate_day, c.package_id, c.area,
+             COALESCE(c.balance, 0) as balance,
              p.name as package_name, p.price as package_price,
              (SELECT count(*) FROM invoices WHERE customer_id = c.id AND (status = 'unpaid' OR status IS NULL)) as unpaid_count,
              (SELECT id FROM invoices WHERE customer_id = c.id AND (status = 'unpaid' OR status IS NULL) ORDER BY id DESC LIMIT 1) as latest_unpaid_invoice_id,
@@ -1463,7 +1502,25 @@ router.get('/app/admin/vouchers/options', requireAdminApiAuth, async (req, res) 
     const settings = getSettingsWithCache();
     const companyName = settings.company_header || settings.company_name || 'ISP NETWORK';
     const companyPhone = settings.company_phone || '';
-    const hotspotDns = settings.hotspot_dns || settings.hotspot_name || 'wifi.id';
+    let hotspotDns = (settings.hotspot_dns || settings.hotspot_name || '').trim();
+    if (hotspotDns === 'wifi.id') hotspotDns = '';
+
+    // If not in settings, try fetching dns-name from MikroTik /ip/hotspot/profile
+    if (!hotspotDns) {
+      try {
+        const mikrotikConn = await mikrotikService.getApiConnection(routerId);
+        if (mikrotikConn) {
+          const hpProfiles = await mikrotikConn.write('/ip/hotspot/profile/print');
+          if (Array.isArray(hpProfiles)) {
+            const withDns = hpProfiles.find(h => (h['dns-name'] || h.dnsName) && (h['dns-name'] || h.dnsName).trim() !== '');
+            if (withDns) {
+              hotspotDns = (withDns['dns-name'] || withDns.dnsName).trim();
+            }
+          }
+        }
+      } catch (_e) {}
+    }
+    if (hotspotDns === 'wifi.id') hotspotDns = '';
 
     const roleName = (req.admin?.role === 'cashier' || req.admin?.username?.toLowerCase().includes('kasir')) 
       ? (req.admin?.username || 'kasir') 
@@ -1556,7 +1613,8 @@ router.post('/app/admin/vouchers/create-single', requireAdminApiAuth, express.js
     const settings = getSettingsWithCache();
     const companyName = settings.company_header || settings.company_name || 'ISP NETWORK';
     const companyPhone = settings.company_phone || '';
-    const hotspotDns = settings.hotspot_dns || settings.hotspot_name || 'wifi.id';
+    let hotspotDns = (settings.hotspot_dns || settings.hotspot_name || '').trim();
+    if (hotspotDns === 'wifi.id') hotspotDns = '';
 
     res.json({
       success: true,
@@ -1704,7 +1762,8 @@ router.get('/app/admin/vouchers/batch/:id/vouchers', requireAdminApiAuth, (req, 
     const settings = getSettingsWithCache();
     const companyName = settings.company_header || settings.company_name || 'ISP NETWORK';
     const companyPhone = settings.company_phone || '';
-    const hotspotDns = settings.hotspot_dns || settings.hotspot_name || 'wifi.id';
+    let hotspotDns = (settings.hotspot_dns || settings.hotspot_name || '').trim();
+    if (hotspotDns === 'wifi.id') hotspotDns = '';
 
     res.json({
       success: true,
@@ -1718,6 +1777,60 @@ router.get('/app/admin/vouchers/batch/:id/vouchers', requireAdminApiAuth, (req, 
     });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+// Send Voucher directly via active WhatsApp Gateway (Baileys / Fonnte / Meta)
+router.post('/app/admin/vouchers/send-wa', requireAdminApiAuth, async (req, res) => {
+  try {
+    let { phone, code, password, profile, validity, price } = req.body;
+    if (!phone || !code) {
+      return res.status(400).json({ success: false, message: 'Nomor WhatsApp dan Kode Voucher wajib diisi' });
+    }
+
+    let p = String(phone).replace(/[^0-9]/g, '');
+    if (p.startsWith('08')) p = '62' + p.substring(1);
+    if (!p.startsWith('62')) p = '62' + p;
+
+    const settings = getSettingsWithCache();
+    const companyName = settings.company_header || settings.company_name || 'ISP NETWORK';
+    const companyPhone = settings.company_phone || '';
+    let hotspotDns = (settings.hotspot_dns || settings.hotspot_name || '').trim();
+    if (hotspotDns === 'wifi.id') hotspotDns = '';
+
+    const pass = password || code;
+    const isSame = code === pass;
+
+    let msg = `🎫 *VOUCHER INTERNET HOTSPOT*\n`;
+    msg += `--------------------------------\n`;
+    msg += `🏢 *${companyName}*\n`;
+    msg += `📦 *Paket:* ${profile || 'Hotspot'}\n`;
+    if (validity && validity !== '-') msg += `⏱️ *Masa Aktif:* ${validity}\n`;
+    if (price) msg += `💰 *Tarif:* ${price}\n\n`;
+
+    if (isSame) {
+      msg += `👤 *Kode Login:* \`${code}\`\n\n`;
+    } else {
+      msg += `👤 *Username:* \`${code}\`\n`;
+      msg += `🔑 *Password:* \`${pass}\`\n\n`;
+    }
+
+    if (hotspotDns) {
+      msg += `🌐 *Login URL:* http://${hotspotDns}\n`;
+    }
+    if (companyPhone) {
+      msg += `📞 *Bantuan / CS:* ${companyPhone}\n`;
+    }
+    msg += `--------------------------------\n`;
+    msg += `Sambungkan perangkat ke WiFi, lalu masukkan kode login di atas. Terima kasih!`;
+
+    const whatsappService = require('../services/whatsappService');
+    await whatsappService.sendWhatsAppMessage(p, msg);
+
+    res.json({ success: true, message: `Voucher berhasil dikirim ke WhatsApp ${phone}` });
+  } catch (err) {
+    logger.error('[Voucher Send WA] Error: ' + err.message);
+    res.status(500).json({ success: false, message: err.message || 'Gagal mengirim pesan WhatsApp' });
   }
 });
 
@@ -1741,7 +1854,8 @@ router.get('/app/admin/vouchers/batch/:id/print', (req, res) => {
     const settings = getSettingsWithCache();
     const companyName = settings.company_header || settings.company_name || 'ISP NETWORK';
     const companyPhone = settings.company_phone || '';
-    const hotspotDns = settings.hotspot_dns || settings.hotspot_name || 'wifi.id';
+    let hotspotDns = (settings.hotspot_dns || settings.hotspot_name || '').trim();
+    if (hotspotDns === 'wifi.id') hotspotDns = '';
     const priceText = Number(batch.price || 0).toLocaleString('id-ID');
     const validityText = batch.validity || '-';
 
@@ -1922,8 +2036,8 @@ router.get('/app/admin/vouchers/batch/:id/print', (req, res) => {
             `}
           </div>
           <div class="v-footer">
-            <span class="v-dns">🌐 ${escapeHtml(hotspotDns)}</span>
-            <span>📞 ${escapeHtml(companyPhone || '-')}</span>
+            <span class="v-dns">${hotspotDns ? `🌐 ${escapeHtml(hotspotDns)}` : ''}</span>
+            <span>${companyPhone ? `📞 ${escapeHtml(companyPhone)}` : ''}</span>
           </div>
         </div>
         `;
@@ -2226,6 +2340,39 @@ router.post('/app/admin/agents/topup', requireAdminApiAuth, (req, res) => {
     const agent = db.prepare('SELECT name, balance FROM agents WHERE id = ?').get(aid);
     res.json({ success: true, message: `Saldo agen "${agent?.name}" berhasil ditambah Rp ${amt.toLocaleString('id-ID')}. Saldo baru: Rp ${(agent?.balance || 0).toLocaleString('id-ID')}` });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+});
+
+router.post('/app/admin/customers/topup', requireAdminApiAuth, async (req, res) => {
+  try {
+    const { customerId, amount, actionType, note, sendWhatsApp } = req.body;
+    const cid = Number(customerId);
+    const amt = Number(amount);
+    const action = actionType === 'deduct' ? 'deduct' : 'add';
+    const actorName = req.admin?.name || req.admin?.username || (req.admin?.role === 'cashier' ? 'Kasir' : 'Admin');
+    const sendWa = sendWhatsApp !== false && sendWhatsApp !== 'false';
+
+    if (!cid || !amt || amt <= 0) {
+      return res.status(400).json({ success: false, message: 'ID Pelanggan dan nominal valid wajib diisi.' });
+    }
+
+    const result = await customerSvc.topupCustomerBalance(cid, amt, note, actorName, action, sendWa);
+    const actionText = action === 'deduct' ? 'dipotong' : 'ditambahkan';
+
+    res.json({
+      success: true,
+      message: `Saldo pelanggan "${result.customer?.name || ''}" berhasil ${actionText} Rp ${amt.toLocaleString('id-ID')}. Sisa saldo: Rp ${result.after.toLocaleString('id-ID')}`,
+      data: {
+        customerId: cid,
+        customerName: result.customer?.name,
+        before: result.before,
+        after: result.after,
+        delta: result.delta,
+        actionType: action
+      }
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
 });
 
 // ─── ADMIN NATIVE: APPROVAL PEMBAYARAN KOLEKTOR ─────────────────────────────
@@ -2995,7 +3142,14 @@ router.get('/app/customer/topup/status/:id', requireCustomerApiAuth, (req, res) 
 router.get('/app/customer/ppob/catalog', (req, res) => {
   try {
     const catalog = getAgentPulsaCatalog();
-    res.json({ success: true, data: catalog });
+    const prods = Array.isArray(catalog.products) ? catalog.products : (Array.isArray(catalog) ? catalog : []);
+    const cats = Array.isArray(catalog.categories) ? catalog.categories : [];
+    res.json({
+      success: true,
+      data: prods,
+      products: prods,
+      categories: cats
+    });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message });
   }
@@ -3009,7 +3163,8 @@ router.post('/app/customer/ppob/order', requireCustomerApiAuth, async (req, res)
 
     const customer = req.customer;
     const catalog = getAgentPulsaCatalog();
-    const product = catalog.find(p => p.sku === sku);
+    const prods = Array.isArray(catalog.products) ? catalog.products : (Array.isArray(catalog) ? catalog : []);
+    const product = prods.find(p => p.sku === sku);
     if (!product) return res.status(404).json({ success: false, message: 'Produk PPOB tidak ditemukan' });
 
     const price = Number(product.price_sell || product.price || 0);
@@ -3025,43 +3180,152 @@ router.post('/app/customer/ppob/order', requireCustomerApiAuth, async (req, res)
     // Deduct balance
     db.prepare('UPDATE customers SET balance = balance - ? WHERE id = ?').run(price, customerId);
 
-    // Call digiflazz if enabled
-    let sn = 'TRX-' + Date.now();
-    let msg = 'Transaksi pulsa berhasil diproses!';
+    const digiRefId = `CUST-APK-${customerId}-${Date.now()}`;
+    let sn = '';
+    let msg = '';
+    let isSuccess = false;
+    let isFailed = false;
+    let digiTrxId = '';
+
     try {
-      if (agentSvc && agentSvc.buyPulsaAsAgent) {
-        const digiRes = await agentSvc.buyPulsaAsAgent(1, sku, target, { sell_price: price });
-        sn = digiRes?.tx?.digi_sn || sn;
-        msg = digiRes?.tx?.digi_message || msg;
+      if (agentSvc && agentSvc.buyPulsaAsAdmin) {
+        const digiRes = await agentSvc.buyPulsaAsAdmin({
+          sku,
+          target,
+          actorName: `Pelanggan ${customer.name}`,
+          actorPhone: customer.phone,
+          refId: digiRefId
+        });
+        sn = String(digiRes?.vendor?.sn || digiRes?.tx?.digi_sn || '');
+        msg = String(digiRes?.vendor?.message || digiRes?.tx?.digi_message || '');
+        digiTrxId = String(digiRes?.vendor?.trx_id || digiRes?.tx?.trx_id || '');
+        const digiStatus = String(digiRes?.vendor?.status || '').toLowerCase();
+        isSuccess = digiStatus === 'sukses' || digiStatus === 'success';
+        isFailed = digiStatus === 'gagal' || digiStatus === 'failed';
+
+        if (isFailed) {
+          // Refund saldo jika ditolak provider langsung
+          db.prepare('UPDATE customers SET balance = balance + ? WHERE id = ?').run(price, customerId);
+          try {
+            db.prepare(`
+              INSERT INTO public_ppob_orders (
+                customer_id, buyer_phone, sku, product_name, target, price, status, digi_ref_id, digi_trx_id, digi_sn, digi_message, created_at, updated_at
+              ) VALUES (?, ?, ?, ?, ?, ?, 'failed', ?, ?, ?, ?, (NOW_LOCAL()), (NOW_LOCAL()))
+            `).run(customerId, customer.phone || '', sku, product.product_name, target, price, digiRefId, digiTrxId, sn, msg || 'Ditolak provider');
+          } catch (_) {}
+
+          return res.status(400).json({
+            success: false,
+            message: 'Transaksi ditolak provider, saldo otomatis dikembalikan. ' + (msg || '')
+          });
+        }
       }
+    } catch (digiErr) {
+      // Refund saldo jika error eksekusi
+      db.prepare('UPDATE customers SET balance = balance + ? WHERE id = ?').run(price, customerId);
+      try {
+        db.prepare(`
+          INSERT INTO public_ppob_orders (
+            customer_id, buyer_phone, sku, product_name, target, price, status, digi_ref_id, digi_message, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, 'failed', ?, ?, (NOW_LOCAL()), (NOW_LOCAL()))
+        `).run(customerId, customer.phone || '', sku, product.product_name, target, price, digiRefId, digiErr.message);
+      } catch (_) {}
+
+      return res.status(500).json({
+        success: false,
+        message: 'Gagal memproses transaksi ke provider: ' + digiErr.message
+      });
+    }
+
+    const orderStatus = isSuccess ? 'fulfilled' : 'processing';
+
+    // Catat ke riwayat
+    try {
+      db.prepare(`
+        INSERT INTO public_ppob_orders (
+          customer_id, buyer_phone, sku, product_name, target, price, status, digi_ref_id, digi_trx_id, digi_sn, digi_message, fulfilled_at, wa_sent, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${isSuccess ? '(NOW_LOCAL())' : 'NULL'}, ?, (NOW_LOCAL()), (NOW_LOCAL()))
+      `).run(customerId, customer.phone || '', sku, product.product_name, target, price, orderStatus, digiRefId, digiTrxId, sn, msg, isSuccess ? 1 : 0);
     } catch (_) {}
 
     const newBalance = db.prepare('SELECT balance FROM customers WHERE id = ?').get(customerId)?.balance || 0;
 
+    // Kirim notifikasi WA struk HANYA jika status sudah SUKSES
+    if (isSuccess) {
+      try {
+        const { getSettings } = require('../config/settingsManager');
+        const settings = getSettings();
+        if (settings.whatsapp_enabled && customer.phone) {
+          const { sendWA, whatsappStatus } = await import('./whatsappBot.mjs');
+          if (whatsappStatus.connection === 'open') {
+            await sendWA(customer.phone,
+              `✅ *TRANSAKSI PPOB BERHASIL*\n\n` +
+              `Halo *${customer.name}*,\n` +
+              `Transaksi pembelian produk digital Anda berhasil diproses:\n\n` +
+              `📦 *Produk:* ${product.product_name}\n` +
+              `🎯 *Tujuan:* ${target}\n` +
+              `💰 *Harga:* Rp ${price.toLocaleString('id-ID')}\n` +
+              (sn ? `🔢 *SN / Token:* \`${sn}\`\n` : '') +
+              `💳 *Sisa Saldo:* Rp ${Number(newBalance).toLocaleString('id-ID')}\n\n` +
+              `Terima kasih telah bertransaksi!`
+            );
+          }
+        }
+      } catch (_) {}
+    }
+
+    const clientMsg = isSuccess
+      ? `Pembelian ${product.product_name} ke ${target} berhasil!`
+      : `Pesanan ${product.product_name} ke ${target} sedang diproses provider. Silakan pantau di riwayat.`;
+
     res.json({
       success: true,
-      message: `Pembelian ${product.product_name} ke ${target} berhasil!`,
+      message: clientMsg,
       data: {
         sku,
         target,
         productName: product.product_name,
         price,
-        sn,
+        status: orderStatus,
+        sn: isSuccess ? sn : '',
         remainingBalance: Number(newBalance)
       }
     });
   } catch (e) {
+
     res.status(500).json({ success: false, message: 'Gagal memproses transaksi: ' + e.message });
   }
 });
+
+// Riwayat transaksi PPOB pelanggan (APK)
+router.get('/app/customer/ppob/history', requireCustomerApiAuth, (req, res) => {
+  try {
+    const customerId = req.customer.id;
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit || '20', 10)));
+    const rows = db.prepare(`
+      SELECT id, sku, product_name, target, price, status, digi_sn, digi_message, created_at, updated_at
+      FROM public_ppob_orders
+      WHERE customer_id = ?
+      ORDER BY id DESC
+      LIMIT ?
+    `).all(customerId, limit);
+    res.json({ success: true, data: rows });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
 router.get('/config', (req, res) => {
+
   const settings = getSettingsWithCache();
+  const adminPhone = getResolvedAdminPhone(settings);
   res.json({
     success: true,
     data: {
       appName: settings.company_header || 'ISP Billing',
       companyHeader: settings.company_header || 'ALIJAYA NET',
-      companyPhone: settings.company_phone || '',
+      companyPhone: adminPhone,
+      adminPhone: adminPhone,
       companyEmail: settings.company_email || '',
       companyAddress: settings.company_address || '',
       operationalHours: settings.operational_hours || '08.00 - 22.00 WIB',
@@ -3091,9 +3355,9 @@ router.post('/auth/login', (req, res) => {
   }
 
   // 1. Check Root Administrator
-  const adminUser = getSetting('admin_username', 'admin');
-  const adminPass = getSetting('admin_password', 'admin123');
-  if (inputUser === adminUser && inputPass === adminPass) {
+  const adminUser = String(getSetting('admin_username', 'admin')).trim();
+  const adminPass = String(getSetting('admin_password', 'admin123')).trim();
+  if (inputUser.toLowerCase() === adminUser.toLowerCase() && inputPass === adminPass) {
     const adminObj = { id: 1, name: 'Administrator', username: adminUser, role: 'admin' };
     const token = generateApiToken({ id: 1, adminId: 1, name: 'Administrator', username: adminUser, role: 'admin' });
     return res.json({
@@ -3340,7 +3604,8 @@ router.get('/dashboard', requireCustomerApiAuth, async (req, res) => {
       ont: ontInfo,
       isp: {
         name: settings.company_header || settings.company_name || settings.isp_name || 'ISP NETWORK',
-        phone: settings.company_phone || '',
+        phone: getResolvedAdminPhone(settings),
+        adminPhone: getResolvedAdminPhone(settings),
         address: settings.company_address || '',
         tagline: settings.company_tagline || settings.footer_info || ''
       }
@@ -4457,7 +4722,115 @@ function ensureCustomerApiInvoiceQrisUnique(inv) {
   return { uniqueCode: chosenCode || 0, amountUnique: chosenAmount || baseAmount };
 }
 
-router.get('/invoices/:id', requireCustomerApiAuth, (req, res) => {
+// Middleware: Customer Auth or Public Invoice Token
+function requireCustomerOrPublicInvoiceAuth(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  if (authHeader && authHeader.toLowerCase().startsWith('bearer ')) {
+    const token = authHeader.substring(7).trim();
+    const payload = verifyApiToken(token);
+    if (payload && payload.role === 'customer') {
+      req.customer = payload;
+      return next();
+    }
+  }
+
+  const pubToken = req.query.token || req.query.t || req.headers['x-invoice-token'];
+  if (pubToken) {
+    const settings = getSettingsWithCache();
+    const tokenUtil = require('../utils/tokenUtil');
+    const p = tokenUtil.verifyPublicToken(pubToken, settings.session_secret);
+    if (p && Number(p.invoiceId) === Number(req.params.id)) {
+      req.publicInvoiceAuth = p;
+      return next();
+    }
+  }
+
+  return res.status(401).json({ success: false, message: 'Autentikasi atau token tagihan diperlukan.' });
+}
+
+// GET /api/customer/public-check-bill?q=08...
+// Pencarian tagihan cepat dari APK tanpa harus login (berdasarkan No. HP, Username PPPoE, atau ID)
+router.get('/public-check-bill', (req, res) => {
+  const qStr = String(req.query.q || '').trim();
+  if (!qStr) {
+    return res.status(400).json({ success: false, message: 'Nomor HP atau ID Pelanggan harus diisi.' });
+  }
+
+  const cleanPhone = qStr.replace(/[^0-9]/g, '');
+  const cust = db.prepare(`
+    SELECT c.id, c.name, c.phone, c.pppoe_username, c.status, c.address, p.name as package_name, p.price as package_price
+    FROM customers c
+    LEFT JOIN packages p ON p.id = c.package_id
+    WHERE c.phone = ? OR c.phone = ? OR c.pppoe_username = ? OR c.id = ?
+  `).get(cleanPhone, qStr, qStr, Number(qStr) || 0);
+
+  if (!cust) {
+    return res.status(404).json({ success: false, message: 'Data pelanggan tidak ditemukan. Periksa kembali nomor HP atau ID yang dimasukkan.' });
+  }
+
+  const unpaidInvoices = db.prepare(`
+    SELECT id, period_month, period_year, amount, status, qris_unique_code, qris_amount_unique
+    FROM invoices
+    WHERE customer_id = ? AND status != 'paid'
+    ORDER BY id DESC
+  `).all(cust.id);
+
+  const settings = getSettingsWithCache();
+  const tokenUtil = require('../utils/tokenUtil');
+
+  const list = unpaidInvoices.map(inv => {
+    const qrisInfo = ensureCustomerApiInvoiceQrisUnique(inv);
+    const pubToken = tokenUtil.signPublicToken({
+      invoiceId: inv.id,
+      customerId: cust.id,
+      lookup: qStr,
+      exp: Date.now() + 60 * 60 * 1000 // 1 jam
+    }, settings.session_secret);
+
+    let rawPayload = String(settings.qris_static_payload || '').trim();
+    let qrisPayload = '';
+    const totalAmt = qrisInfo.amountUnique || Number(inv.amount || 0);
+    if (rawPayload) {
+      try {
+        qrisPayload = qrisUtil.convertStaticQrisToDynamic(rawPayload, totalAmt);
+      } catch (e) {
+        qrisPayload = rawPayload;
+      }
+    }
+
+    return {
+      id: inv.id,
+      invoiceNo: `#INV-${inv.id}`,
+      periodMonth: inv.period_month,
+      periodYear: inv.period_year,
+      baseAmount: Number(inv.amount || 0),
+      uniqueCode: qrisInfo.uniqueCode,
+      totalAmount: totalAmt,
+      qrisPayload: qrisPayload,
+      qrisImageEndpoint: `/api/customer/invoices/${inv.id}/qris-image`,
+      publicToken: pubToken,
+      status: inv.status
+    };
+  });
+
+  res.json({
+    success: true,
+    data: {
+      customer: {
+        id: cust.id,
+        name: cust.name,
+        phone: cust.phone,
+        status: cust.status,
+        packageName: cust.package_name || 'Paket Internet Home'
+      },
+      unpaidCount: list.length,
+      totalUnpaid: list.reduce((sum, item) => sum + item.totalAmount, 0),
+      invoices: list
+    }
+  });
+});
+
+router.get('/invoices/:id', requireCustomerOrPublicInvoiceAuth, (req, res) => {
   const invId = Number(req.params.id);
   if (!invId) {
     return res.status(400).json({ success: false, message: 'ID tagihan tidak valid.' });
@@ -4480,6 +4853,8 @@ router.get('/invoices/:id', requireCustomerApiAuth, (req, res) => {
   const qrisInfo = ensureCustomerApiInvoiceQrisUnique(inv);
   const uniqueCode = qrisInfo.uniqueCode;
   const totalAmt = qrisInfo.amountUnique || baseAmt;
+
+  const activeGateway = paymentSvc.resolveConfiguredGatewayForAmount(settings, baseAmt) || 'qris_static';
 
   let rawPayload = String(settings.qris_static_payload || '').trim();
   let qrisPayload = '';
@@ -4508,10 +4883,13 @@ router.get('/invoices/:id', requireCustomerApiAuth, (req, res) => {
       qrisImageEndpoint: `/api/customer/invoices/${inv.id}/qris-image`,
       status: inv.status || 'unpaid',
       paidAt: inv.paid_at,
-      paymentGateway: inv.payment_gateway,
+      activeGateway: activeGateway,
+      paymentGateway: inv.payment_gateway || activeGateway,
       paymentOrderId: inv.payment_order_id,
       paymentLink: inv.payment_link,
-      instructions: 'Transfer manual atau e-wallet dapat dikonfirmasi langsung via WhatsApp atau dibayarkan melalui Agen / Kasir resmi.'
+      companyPhone: getResolvedAdminPhone(settings),
+      adminPhone: getResolvedAdminPhone(settings),
+      instructions: 'Transfer manual atau scan QRIS melalui m-Banking / e-Wallet (BCA, Mandiri, BRI, BNI, DANA, GoPay, OVO, ShopeePay).'
     }
   });
 });
@@ -4522,7 +4900,7 @@ router.get('/invoices/:id/qris-image', async (req, res) => {
     const invId = Number(req.params.id);
     let inv = null;
     if (invId > 0) {
-      inv = db.prepare('SELECT id, customer_id, amount, status, qris_unique_code, qris_amount_unique FROM invoices WHERE id = ?').get(invId);
+      inv = db.prepare('SELECT id, customer_id, amount, status, qris_unique_code, qris_amount_unique, payment_gateway, payment_order_id, payment_link FROM invoices WHERE id = ?').get(invId);
     }
     if (!inv) {
       inv = db.prepare("SELECT id, customer_id, amount, status, qris_unique_code, qris_amount_unique FROM invoices WHERE status != 'paid' ORDER BY id DESC LIMIT 1").get();
@@ -4540,9 +4918,9 @@ router.get('/invoices/:id/qris-image', async (req, res) => {
       payload = qrisUtil.convertStaticQrisToDynamic(payload, totalAmt);
     } catch (_) {}
 
-    const buf = await QRCode.toBuffer(payload, { width: 500, margin: 2 });
+    const buf = await QRCode.toBuffer(payload, { width: 600, margin: 2 });
     res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.setHeader('Cache-Control', 'public, max-age=120');
     res.send(buf);
   } catch (e) {
     res.status(500).send('Error generating QRIS: ' + e.message);
@@ -4604,11 +4982,16 @@ router.post('/invoices/:id/pay', requireCustomerApiAuth, async (req, res) => {
   }
 });
 
-// Cek Status Pembayaran Real-time
-router.get('/invoices/:id/check-status', requireCustomerApiAuth, (req, res) => {
+// Cek Status Pembayaran Real-time (Support Customer Auth maupun Public Token)
+router.get('/invoices/:id/check-status', requireCustomerOrPublicInvoiceAuth, (req, res) => {
   const invId = Number(req.params.id);
-  const inv = db.prepare('SELECT id, status, paid_at, payment_gateway FROM invoices WHERE id = ? AND customer_id = ?').get(invId, req.customer.id);
+  const inv = db.prepare('SELECT id, customer_id, status, paid_at, payment_gateway FROM invoices WHERE id = ?').get(invId);
   if (!inv) return res.status(404).json({ success: false, message: 'Tagihan tidak ditemukan.' });
+
+  // Validasi customer_id jika customer authenticated
+  if (req.customer && Number(inv.customer_id) !== Number(req.customer.id || req.customer.customerId)) {
+    return res.status(403).json({ success: false, message: 'Akses ditolak.' });
+  }
 
   res.json({
     success: true,

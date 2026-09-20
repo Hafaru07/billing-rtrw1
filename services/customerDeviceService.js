@@ -160,7 +160,66 @@ const parameterPaths = {
     'InternetGatewayDevice.WANDevice.1.X_CT-COM_GponInterfaceConfig.RXPower',
     'InternetGatewayDevice.WANDevice.1.X_CU_WANEPONInterfaceConfig.OpticalTransceiver.RXPower',
     'Device.Optical.Interface.1.OpticalSignalLevel',
-    'Device.XPON.Interface.1.Stats.RXPower'
+    'Device.XPON.Interface.1.Stats.RXPower',
+    // Nokia / Alcatel-Lucent
+    'InternetGatewayDevice.WANDevice.1.X_ALU-COM_GponInterfaceConfig.RXPower',
+    'InternetGatewayDevice.WANDevice.1.X_ALU-COM_GponInterfaceConfig.RxPower',
+    'InternetGatewayDevice.WANDevice.1.X_ALU_COM_GponInterfaceConfig.RXPower',
+    'Device.Optical.Interface.1.CurrentStatus.RXPower',
+    'Device.Optical.Interface.1.RXPower',
+    // FiberHome
+    'InternetGatewayDevice.WANDevice.1.X_FH_GponInterfaceConfig.RxPower',
+    'InternetGatewayDevice.WANDevice.1.X_FH_EponInterfaceConfig.RXPower',
+    // ZTE / CMCC varian huruf kecil
+    'InternetGatewayDevice.WANDevice.1.X_CMCC_GponInterfaceConfig.RxPower',
+    'InternetGatewayDevice.WANDevice.1.X_CMCC_EponInterfaceConfig.RxPower',
+    'InternetGatewayDevice.WANDevice.1.X_ZTE-COM_WANPONInterfaceConfig.RxPower',
+    // Huawei varian
+    'InternetGatewayDevice.WANDevice.1.X_HW_WANPONInterfaceConfig.RXPower',
+    'InternetGatewayDevice.WANDevice.1.WANPONInterfaceConfig.RxPower'
+  ],
+
+  // Cabang induk yang ikut diminta ke GenieACS. Memakai node induk (bukan daun)
+  // supaya varian penamaan RXPower/RxPower milik tiap merek tetap ikut terambil.
+  // Username PPPoE: banyak ONU (Huawei/ZTE) menaruhnya di WANConnectionDevice ke-2
+  // atau lebih. Tanpa diminta di projection, nilainya tidak pernah dikirim GenieACS.
+  pppoeBranches: [
+    'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username',
+    'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.2.Username',
+    'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.Username',
+    'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.2.Username',
+    'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.3.WANPPPConnection.1.Username',
+    'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.3.WANPPPConnection.2.Username',
+    'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.4.WANPPPConnection.1.Username',
+    'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.5.WANPPPConnection.1.Username',
+    'Device.PPP.Interface.1.Username',
+    'Device.PPP.Interface.2.Username',
+    'Device.PPP.Interface.3.Username'
+  ],
+
+  rxPowerBranches: [
+    'VirtualParameters',
+    'InternetGatewayDevice.WANDevice.1.WANPONInterfaceConfig',
+    'InternetGatewayDevice.WANDevice.1.X_GponInterfaceConfig',
+    'InternetGatewayDevice.WANDevice.1.X_GponInterafceConfig',
+    'InternetGatewayDevice.WANDevice.1.X_HW_GponInterfaceConfig',
+    'InternetGatewayDevice.WANDevice.1.X_HW_WANPONInterfaceConfig',
+    'InternetGatewayDevice.WANDevice.1.X_ZTE_GponInterfaceConfig',
+    'InternetGatewayDevice.WANDevice.1.X_ZTE-COM_WANPONInterfaceConfig',
+    'InternetGatewayDevice.WANDevice.1.X_ALU-COM_GponInterfaceConfig',
+    'InternetGatewayDevice.WANDevice.1.X_ALU_COM_GponInterfaceConfig',
+    'InternetGatewayDevice.WANDevice.1.X_FH_GponInterfaceConfig',
+    'InternetGatewayDevice.WANDevice.1.X_FH_EponInterfaceConfig',
+    'InternetGatewayDevice.WANDevice.1.X_CMCC_GponInterfaceConfig',
+    'InternetGatewayDevice.WANDevice.1.X_CMCC_EponInterfaceConfig',
+    'InternetGatewayDevice.WANDevice.1.X_CT-COM_GponInterfaceConfig',
+    'InternetGatewayDevice.WANDevice.1.X_CT-COM_EponInterfaceConfig',
+    'InternetGatewayDevice.WANDevice.1.X_CU_WANEPONInterfaceConfig.OpticalTransceiver',
+    'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.X_HW_OpticalSignal',
+    'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.X_ZTE_OpticalSignal',
+    'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANOAM',
+    'Device.Optical.Interface.1',
+    'Device.XPON.Interface.1.Stats'
   ],
   pppoeIP: [
     'VirtualParameters.pppoeIP',
@@ -223,6 +282,11 @@ const PPPOE_IP_KEYS = [
 
 // PPPoE Username search keys matching user's template
 const PPPOE_USER_KEYS = [
+  // VirtualParameters didahulukan: selalu ikut terambil dan sudah dinormalkan ACS
+  'VirtualParameters.pppoeUsername',
+  'VirtualParameters.pppoeUsername2',
+  'VirtualParameters.pppUsername',
+  'VirtualParameters.PPPoEUsername',
   'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username',
   'InternetGatewayDevice.WANDevice.*.WANConnectionDevice.1.WANPPPConnection.2.Username',
   'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.Username',
@@ -510,6 +574,36 @@ function extractPppoeUptime(d) {
   return 'N/A';
 }
 
+/**
+ * Cadangan terakhir: telusuri objek perangkat untuk kunci apa pun yang berbau
+ * RXPower / OpticalSignalLevel. Dipakai bila merek ONU memakai penamaan yang
+ * belum terdaftar di parameterPaths.rxPower.
+ */
+function findRxPowerDeep(node, depth) {
+  depth = depth || 0;
+  if (!node || typeof node !== 'object' || depth > 8) return null;
+
+  for (const key of Object.keys(node)) {
+    const lower = key.toLowerCase();
+    const cocok = (lower.includes('rxpower') || lower.includes('opticalsignallevel') || lower === 'rx_power');
+    if (cocok && !lower.includes('tx')) {
+      let val = node[key];
+      if (val && typeof val === 'object' && val._value !== undefined) val = val._value;
+      if (val !== undefined && val !== null && String(val).trim() !== '' && String(val) !== 'N/A') {
+        const num = parseFloat(val);
+        if (Number.isFinite(num)) return val;
+      }
+    }
+  }
+
+  for (const key of Object.keys(node)) {
+    if (key.startsWith('_')) continue;
+    const hasil = findRxPowerDeep(node[key], depth + 1);
+    if (hasil !== null) return hasil;
+  }
+  return null;
+}
+
 function getParameterWithPaths(device, paths) {
   let values = [];
   for (const p of paths) {
@@ -695,6 +789,10 @@ function mapDeviceData(device, tag, isPppoeActive = false) {
   } catch {}
 
   let rxPower = getParameterWithPaths(device, parameterPaths.rxPower);
+  if (rxPower === 'N/A' || rxPower === '-' || rxPower === '' || rxPower === undefined || rxPower === null) {
+    const cadangan = findRxPowerDeep(device);
+    if (cadangan !== null) rxPower = cadangan;
+  }
   if (rxPower !== 'N/A' && rxPower !== '-' && rxPower !== '') {
     const num = parseFloat(rxPower);
     if (!isNaN(num) && num > 0) {
@@ -1244,7 +1342,9 @@ async function listAllDevices(limit = 999999, acsId = null) {
       const instance = genieacsApi.createAxiosInstance(server);
       const params = {
         limit,
-        projection: '_id,_tags,_lastInform,DeviceID.SerialNumber,VirtualParameters,InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username,InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.2.Username,InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ExternalIPAddress,Device.PPP.Interface.1.Username,Device.PPP.Interface.1.ExternalIPAddress,InternetGatewayDevice.DeviceInfo.ModelName,InternetGatewayDevice.DeviceInfo.SoftwareVersion,InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID,InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.TotalAssociations,InternetGatewayDevice.LANDevice.1.WLANConfiguration.5.TotalAssociations,InternetGatewayDevice.LANDevice.1.Hosts.HostNumberOfEntries,Device.WiFi.AccessPoint.1.AssociatedDeviceNumberOfEntries,Device.Hosts.HostNumberOfEntries,InternetGatewayDevice.LANDevice.1.Hosts.Host,Device.Hosts.Host'
+        // Cabang RX power tiap merek ikut diminta; tanpa ini GenieACS tidak
+        // mengirim nilainya dan redaman selalu kosong untuk Huawei/Nokia/FH/ZTE.
+        projection: [parameterPaths.rxPowerBranches.join(','), parameterPaths.pppoeBranches.join(','), '_id,_tags,_lastInform,DeviceID.SerialNumber,VirtualParameters,InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username,InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.2.Username,InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ExternalIPAddress,Device.PPP.Interface.1.Username,Device.PPP.Interface.1.ExternalIPAddress,InternetGatewayDevice.DeviceInfo.ModelName,InternetGatewayDevice.DeviceInfo.SoftwareVersion,InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID,InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.TotalAssociations,InternetGatewayDevice.LANDevice.1.WLANConfiguration.5.TotalAssociations,InternetGatewayDevice.LANDevice.1.Hosts.HostNumberOfEntries,Device.WiFi.AccessPoint.1.AssociatedDeviceNumberOfEntries,Device.Hosts.HostNumberOfEntries,InternetGatewayDevice.LANDevice.1.Hosts.Host,Device.Hosts.Host'].join(',')
       };
       let response;
       try {
@@ -1320,5 +1420,7 @@ module.exports = {
   listAllDevices,
   expandTagCandidates,
   findDeviceWithTagVariants,
-  phoneFromPnJid
+  phoneFromPnJid,
+  findRxPowerDeep,
+  parameterPaths
 };

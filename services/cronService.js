@@ -8,11 +8,67 @@ const { logger } = require('../config/logger');
 const customerSvc = require('./customerService');
 const mikrotikService = require('./mikrotikService');
 const usageSvc = require('./usageService');
-const { getSetting } = require('../config/settingsManager');
+const { getSetting, getNowLocal } = require('../config/settingsManager');
 const db = require('../config/database');
 const qrisUtil = require('../utils/qrisUtil');
 
 // Helper: Random delay generator untuk smart rate limiting
+// Penanda supaya pengingat tidak dobel kirim dalam satu hari.
+let sedangKirimPengingat = false;
+
+function tanggalHariIniLokal() {
+  return String(getNowLocal() || '').slice(0, 10); // YYYY-MM-DD sesuai timezone setting
+}
+
+function jamSekarangLokal() {
+  return Number(String(getNowLocal() || '').slice(11, 13));
+}
+
+function pengingatSudahJalanHariIni() {
+  return String(db.getAppSetting('whatsapp_reminder_last_run', '') || '') === tanggalHariIniLokal();
+}
+
+function tandaiPengingatSudahJalan() {
+  db.saveAppSetting('whatsapp_reminder_last_run', tanggalHariIniLokal());
+}
+
+/**
+ * Hari-hari pengingat yang aktif. H-1 selalu ikut supaya pelanggan pasti
+ * diingatkan sehari sebelum isolir, berapa pun toggle lain yang dipilih admin.
+ */
+function getReminderDays() {
+  const raw = getSetting('whatsapp_reminder_days', [1]);
+  const arr = Array.isArray(raw) ? raw : String(raw || '').split(',');
+  const hasil = arr
+    .map(function (v) { return parseInt(v, 10); })
+    .filter(function (n) { return Number.isFinite(n) && n >= 1 && n <= 60; });
+  if (!hasil.includes(1)) hasil.push(1); // H-1 wajib
+  return Array.from(new Set(hasil)).sort(function (a, b) { return b - a; });
+}
+
+/**
+ * Teks pengganti variabel {{h-}} pada template pesan.
+ * Contoh: 7 -> '(7 Hari Sebelum)', 1 -> '(1 Hari Sebelum)'.
+ */
+function formatHMinus(days) {
+  const n = parseInt(days, 10);
+  if (!Number.isFinite(n) || n < 1) return '';
+  return '(' + n + ' Hari Sebelum)';
+}
+
+/**
+ * Jeda antar pesan dibuat acak dalam rentang (bawaan 45-100 detik) supaya pola
+ * pengiriman tidak terlihat seperti bot dengan jarak waktu yang selalu sama.
+ */
+function getDynamicDelayMs() {
+  let min = Number(getSetting('whatsapp_delay_min', 45) || 45);
+  let max = Number(getSetting('whatsapp_delay_max', 100) || 100);
+  if (!Number.isFinite(min) || min < 5) min = 45;
+  if (!Number.isFinite(max) || max < min) max = Math.max(min, 100);
+  const detik = Math.floor(Math.random() * (max - min + 1)) + min;
+  return detik * 1000;
+}
+
 function getRandomDelay(baseDelayMs, varianceMs = 3000) {
   const minDelay = Math.max(baseDelayMs - varianceMs, 2000);
   const maxDelay = baseDelayMs + varianceMs;
@@ -64,8 +120,9 @@ function startCronJobs() {
     
     logger.info(`[CRON] Menjalankan generate tagihan otomatis untuk ${month}/${year}`);
     try {
-      const count = billingSvc.generateMonthlyInvoices(month, year);
-      logger.info(`[CRON] Berhasil generate ${count} tagihan otomatis.`);
+      // Cron tetap menggenerate semua pelanggan (tanpa penyaringan tanggal jatuh tempo)
+      const hasil = billingSvc.generateMonthlyInvoices(month, year);
+      logger.info(`[CRON] Berhasil generate ${hasil.created} tagihan otomatis.`);
     } catch (error) {
       logger.error(`[CRON] Gagal generate tagihan otomatis: ${error.message}`);
     }
@@ -135,7 +192,13 @@ function startCronJobs() {
     logger.info(`[CRON] Selesai pengecekan isolir. Total ${isolatedCount} pelanggan baru di-isolir.`);
   });
 
-  cron.schedule('0 9 * * *', async () => {
+  // 3. Pengingat Tagihan Otomatis - mulai jam 07:00 setiap hari.
+  //    Semua pelanggan yang jatuh tempo pada hari pengingat aktif (H-7/H-5/H-3/H-1)
+  //    dikumpulkan dulu jadi satu antrean, lalu dikirim berurutan dengan jeda acak
+  //    sampai antrean habis pada hari yang sama.
+  const jalankanPengingat = async (susulan) => {
+    if (pengingatSudahJalanHariIni()) return;
+
     const enabled = getSetting('whatsapp_auto_billing_enabled', false);
     const waEnabled = getSetting('whatsapp_enabled', false);
     const billingEnabled = getSetting('whatsapp_billing_to_customer_enabled', true);
@@ -168,7 +231,9 @@ function startCronJobs() {
       }
 
       if (!whatsappStatus || whatsappStatus.connection !== 'open') {
-        logger.warn('[CRON] WhatsApp bot belum terhubung, pengingat tagihan otomatis dilewati.');
+        // Tidak ditandai selesai, supaya pengecekan susulan mencoba lagi
+        // begitu bot terhubung.
+        if (!susulan) logger.warn('[CRON] WhatsApp bot belum terhubung, pengingat tagihan ditunda sampai bot siap.');
         return;
       }
     }
@@ -193,6 +258,8 @@ function startCronJobs() {
 
     const today = new Date();
     const day = today.getDate();
+    const reminderDays = getReminderDays();
+    logger.info('[CRON] Hari pengingat aktif: H-' + reminderDays.join(', H-'));
 
     const customers = customerSvc.getAllCustomers();
     let targetCount = 0;
@@ -231,8 +298,9 @@ function startCronJobs() {
           if (!isNaN(expDate.getTime())) {
             const diffMs = expDate.getTime() - today.getTime();
             const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
-            if (diffDays === 1 || diffDays === 2) {
+            if (reminderDays.includes(diffDays)) {
               shouldSend = true;
+              c._hMinus = diffDays;
             }
           }
         }
@@ -240,8 +308,15 @@ function startCronJobs() {
         const unpaidCount = Number(c.unpaid_count || 0) || 0;
         if (unpaidCount > 0) {
           const dueDay = Number(c.isolate_day || 0) || Number(getSetting('isolir_day', 10) || 10) || 10;
-          const remind1 = dueDay - 1;
-          shouldSend = (remind1 >= 1 && day === remind1);
+          // Cocokkan hari ini dengan salah satu hari pengingat aktif (H-7/H-5/H-3/H-1).
+          for (const h of reminderDays) {
+            const tanggalIngat = dueDay - h;
+            if (tanggalIngat >= 1 && day === tanggalIngat) {
+              shouldSend = true;
+              c._hMinus = h; // dipakai untuk variabel {{h-}}
+              break;
+            }
+          }
         }
       }
 
@@ -252,11 +327,26 @@ function startCronJobs() {
     }
 
     if (targetCustomers.length === 0) {
-      logger.info('[CRON] Tidak ada pelanggan yang perlu diingatkan hari ini.');
+      // Belum ditandai selesai: kalau tagihan baru dibuat siang hari,
+      // pengecekan susulan masih bisa menjemputnya hari ini juga.
+      if (!susulan) logger.info('[CRON] Tidak ada pelanggan yang perlu diingatkan hari ini.');
       return;
     }
 
-    logger.info(`[CRON] Memulai pengingat tagihan otomatis untuk ${targetCustomers.length} pelanggan dengan smart rate limit.`);
+    // Perkiraan durasi: rata-rata jeda acak per pesan + jeda antar batch.
+    const jedaRata = (Number(getSetting('whatsapp_delay_min', 45) || 45) + Number(getSetting('whatsapp_delay_max', 100) || 100)) / 2;
+    const perkiraanMenit = Math.ceil(
+      ((targetCustomers.length - 1) * jedaRata * 1000 +
+        Math.floor((targetCustomers.length - 1) / batchSize) * batchPauseMs) / 60000
+    );
+    // Ditandai sebelum mulai mengirim supaya tidak ada pengiriman dobel
+    // kalau proses lain ikut terpicu di tengah antrean.
+    tandaiPengingatSudahJalan();
+    logger.info(
+      `[CRON] Antrean pengingat tagihan: ${targetCustomers.length} pelanggan, ` +
+      `jeda acak ~${Math.round(jedaRata)} detik/pesan, perkiraan selesai ${perkiraanMenit} menit lagi` +
+      (susulan ? ' (jalan susulan, jadwal 07:00 terlewat).' : '.')
+    );
 
     // Kirim pesan dengan smart rate limit
     for (let i = 0; i < targetCustomers.length; i++) {
@@ -266,9 +356,12 @@ function startCronJobs() {
 
       while (attemptCount < maxAttempts) {
         try {
-          // Smart Random Delay
-          const randomDelay = getRandomDelay(baseDelayMs, 2000);
-          await new Promise(r => setTimeout(r, randomDelay));
+          // Pesan pertama langsung dikirim begitu cron jalan jam 07:00. Sisanya
+          // diberi jeda acak (bawaan 45-100 detik) supaya pola kirim tidak seragam.
+          if (i > 0 || attemptCount > 0) {
+            const randomDelay = getDynamicDelayMs();
+            await new Promise(r => setTimeout(r, randomDelay));
+          }
 
           const unpaidInvoices = billingSvc.getUnpaidInvoicesByCustomerId(c.id);
           const totalTagihan = unpaidInvoices.reduce((sum, inv) => sum + (Number(inv.amount) || 0), 0);
@@ -349,7 +442,8 @@ function startCronJobs() {
             .replace(/{{tagihan}}/gi, finalTagihanStr)
             .replace(/{{rincian}}/gi, rincianBulan || '-')
             .replace(/{{paket}}/gi, c.package_name || '-')
-            .replace(/{{link}}/gi, loginLink);
+            .replace(/{{link}}/gi, loginLink)
+            .replace(/{{h-}}/gi, formatHMinus(c._hMinus));
 
           const { parseSpintax } = await import('./whatsappBot.mjs');
           formattedMsg = parseSpintax(formattedMsg);
@@ -363,6 +457,7 @@ function startCronJobs() {
             sent++;
             targetCount++;
             batchCount++;
+            logger.info(`[CRON] Pengingat ${sent}/${targetCustomers.length} terkirim ke ${c.name || c.phone} (H-${c._hMinus || 1}).`);
           } else {
             throw new Error('Gagal kirim pesan');
           }
@@ -403,6 +498,31 @@ function startCronJobs() {
     }
 
     logger.info(`[CRON] Pengingat tagihan otomatis selesai: target=${targetCount}, terkirim=${sent}, gagal=${failed}`);
+  };
+
+  // Pembungkus: cegah dua antrean berjalan bersamaan.
+  const jalankanPengingatAman = async (susulan) => {
+    if (sedangKirimPengingat) return;
+    sedangKirimPengingat = true;
+    try {
+      await jalankanPengingat(susulan);
+    } catch (e) {
+      logger.error(`[CRON] Pengingat tagihan berhenti karena error: ${e.message || e}`);
+    } finally {
+      sedangKirimPengingat = false;
+    }
+  };
+
+  cron.schedule('0 7 * * *', () => jalankanPengingatAman(false));
+
+  // 3b. Jaring pengaman. Kalau jam 07:00 server sedang mati, WhatsApp belum
+  //     terhubung, atau tagihan baru dibuat siang hari, pengingat hari itu
+  //     tidak hilang: dicek ulang tiap 15 menit sampai jam 20:00.
+  cron.schedule('*/15 * * * *', () => {
+    const jam = jamSekarangLokal();
+    if (!Number.isFinite(jam) || jam < 7 || jam >= 20) return;
+    if (pengingatSudahJalanHariIni()) return;
+    jalankanPengingatAman(true);
   });
 
   // 4. Jam Kalong (Night Speed) Start - Jam 00:00
@@ -696,4 +816,7 @@ function startCronJobs() {
   logger.info('[CRON] Semua tugas penjadwalan telah aktif.');
 }
 
-module.exports = { startCronJobs };
+module.exports = {
+  getReminderDays,
+  formatHMinus,
+  getDynamicDelayMs, startCronJobs };

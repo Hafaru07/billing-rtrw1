@@ -790,7 +790,7 @@ function initTelegram() {
     const year = Number(match[2]);
     try {
       const res = billingSvc.generateMonthlyInvoices(month, year);
-      bot.sendMessage(chatId, `✅ Berhasil generate tagihan untuk periode *${month}/${year}*.\n🧾 Jumlah: ${res.generatedCount} tagihan baru.`, { parse_mode: 'Markdown' });
+      bot.sendMessage(chatId, `✅ Berhasil generate tagihan untuk periode *${month}/${year}*.\n🧾 Jumlah: ${res.created} tagihan baru.`, { parse_mode: 'Markdown' });
     } catch (e) {
       bot.sendMessage(chatId, '❌ Gagal generate tagihan: ' + e.message);
     }

@@ -312,6 +312,35 @@ const insertAgentTxRefund = db.prepare(`
   ) VALUES (?, 'topup', ?, ?, 0, ?, ?, ?)
 `);
 
+const selectPublicPpobOrderByRefId = db.prepare(`
+  SELECT id, customer_id, buyer_phone, sku, product_name, target, price, status, wa_sent, digi_ref_id
+  FROM public_ppob_orders
+  WHERE digi_ref_id = ?
+  ORDER BY id DESC
+  LIMIT 1
+`);
+
+const updatePublicPpobOrderSuccessFromWebhook = db.prepare(`
+  UPDATE public_ppob_orders
+  SET status = 'fulfilled',
+      fulfilled_at = (NOW_LOCAL()),
+      digi_trx_id = ?,
+      digi_sn = ?,
+      digi_message = ?,
+      wa_sent = CASE WHEN ? = 1 THEN 1 ELSE wa_sent END,
+      updated_at = (NOW_LOCAL())
+  WHERE id = ?
+`);
+
+const updatePublicPpobOrderFailedFromWebhook = db.prepare(`
+  UPDATE public_ppob_orders
+  SET status = 'failed',
+      digi_trx_id = ?,
+      digi_message = ?,
+      updated_at = (NOW_LOCAL())
+  WHERE id = ?
+`);
+
 function normalizeDigiflazzStatus(status) {
   const s = String(status || '').toLowerCase();
   if (s === 'sukses' || s === 'success') return 'success';
@@ -1001,11 +1030,14 @@ app.post('/webhook/digiflazz', async (req, res) => {
   }
 
   let matchedTxId = null;
+  let matchedPpobOrderId = null;
   try {
+    const nextStatus = normalizeDigiflazzStatus(vendorStatus);
+
+    // 1. Cek matching agent_transactions
     const tx = selectAgentPulsaTxByRefId.get(refId);
     matchedTxId = tx?.id || null;
 
-    const nextStatus = normalizeDigiflazzStatus(vendorStatus);
     if (tx && tx.id) {
       updateAgentPulsaTxFromWebhook.run(
         nextStatus,
@@ -1042,15 +1074,86 @@ app.post('/webhook/digiflazz', async (req, res) => {
         runRefund();
       }
     }
+
+    // 2. Cek matching public_ppob_orders (Pelanggan Web & APK)
+    const custOrder = selectPublicPpobOrderByRefId.get(refId);
+    matchedPpobOrderId = custOrder?.id || null;
+
+    if (custOrder && custOrder.id) {
+      if (nextStatus === 'success') {
+        const wasSentBefore = Number(custOrder.wa_sent || 0) === 1;
+        updatePublicPpobOrderSuccessFromWebhook.run(
+          vendorTrxId,
+          vendorSn,
+          vendorMessage,
+          1,
+          custOrder.id
+        );
+
+        // Kirim notifikasi WA Sukses jika belum pernah dikirim
+        if (!wasSentBefore && custOrder.buyer_phone) {
+          try {
+            const { getSettings } = require('./config/settingsManager');
+            const settings = getSettings();
+            if (settings.whatsapp_enabled) {
+              const { sendWA, whatsappStatus } = await import('./services/whatsappBot.mjs');
+              if (whatsappStatus.connection === 'open') {
+                const custRow = db.prepare('SELECT balance, name FROM customers WHERE id = ?').get(custOrder.customer_id);
+                const curBal = custRow?.balance || 0;
+                await sendWA(custOrder.buyer_phone,
+                  `✅ *TRANSAKSI PPOB BERHASIL*\n\n` +
+                  `Halo *${custRow?.name || 'Pelanggan'}*,\n` +
+                  `Transaksi pembelian produk digital Anda berhasil diproses:\n\n` +
+                  `📦 *Produk:* ${custOrder.product_name}\n` +
+                  `🎯 *Tujuan:* ${custOrder.target}\n` +
+                  `💰 *Harga:* Rp ${Number(custOrder.price || 0).toLocaleString('id-ID')}\n` +
+                  (vendorSn ? `🔢 *SN / Token:* \`${vendorSn}\`\n` : '') +
+                  `💳 *Sisa Saldo:* Rp ${Number(curBal).toLocaleString('id-ID')}\n\n` +
+                  `Terima kasih telah bertransaksi!`
+                );
+              }
+            }
+          } catch (waErr) {
+            logger.error(`[WEBHOOK][digiflazz] WA send error for order #${custOrder.id}: ${waErr.message}`);
+          }
+        }
+      } else if (nextStatus === 'failed') {
+        if (String(custOrder.status || '').toLowerCase() !== 'failed') {
+          updatePublicPpobOrderFailedFromWebhook.run(
+            vendorTrxId,
+            vendorMessage || 'Ditolak provider',
+            custOrder.id
+          );
+
+          // Auto-refund saldo pelanggan
+          if (custOrder.customer_id && custOrder.price > 0) {
+            db.prepare('UPDATE customers SET balance = balance + ? WHERE id = ?').run(custOrder.price, custOrder.customer_id);
+            logger.info(`[WEBHOOK][digiflazz] Refunded customer #${custOrder.customer_id} amount Rp ${custOrder.price} for failed order #${custOrder.id}`);
+          }
+        }
+      }
+    }
+
+    // 3. Cek matching digiflazz_staff_transactions
+    try {
+      db.prepare(`
+        UPDATE digiflazz_staff_transactions
+        SET status = ?, trx_id = ?, sn = ?, message = ?, price = CASE WHEN ? > 0 THEN ? ELSE price END
+        WHERE ref_id = ?
+      `).run(nextStatus, vendorTrxId, vendorSn, vendorMessage, vendorPrice, vendorPrice, refId);
+    } catch (_) {}
+
   } catch (e) {
+    logger.error(`[WEBHOOK][digiflazz] Error processing webhook: ${e.message}`);
     try { insertDigiflazzWebhookLog.run(refId, vendorStatus, String(signature || ''), sigOk, matchedTxId, ip, raw); } catch {}
     return res.status(500).send('Internal Server Error');
   }
 
   try { insertDigiflazzWebhookLog.run(refId, vendorStatus, String(signature || ''), sigOk, matchedTxId, ip, raw); } catch {}
-  logger.info(`[WEBHOOK][digiflazz] event=${eventName || '-'} ua=${userAgent || '-'} ref=${refId} status=${vendorStatus} ok=${sigOk} match=${matchedTxId || '-'}`);
-  return res.json({ success: true, ref_id: refId, matched_agent_tx_id: matchedTxId });
+  logger.info(`[WEBHOOK][digiflazz] event=${eventName || '-'} ua=${userAgent || '-'} ref=${refId} status=${vendorStatus} ok=${sigOk} matchTx=${matchedTxId || '-'} matchOrder=${matchedPpobOrderId || '-'}`);
+  return res.json({ success: true, ref_id: refId, matched_agent_tx_id: matchedTxId, matched_ppob_order_id: matchedPpobOrderId });
 });
+
 
 // Inisialisasi database billing
 try {
@@ -1090,72 +1193,95 @@ app.get('/login', (req, res) => {
 });
 
 // Halaman Isolir (Akses langsung dari redirect MikroTik) - dengan integrasi pembayaran otomatis
-app.get('/isolated', (req, res) => {
+app.get('/isolated', async (req, res) => {
   try {
     const settings = getSettingsWithCache();
     
-    // 1. Identifikasi pelanggan dari session atau IP
+    // 1. Identifikasi pelanggan: Session, Query param (?q= / ?cid=), atau IP
     let customer = null;
-    let invoices = [];
+    const searchQuery = String(req.query.q || req.query.lookup || req.query.cid || req.query.phone || '').trim();
     
-    // Try: Session-based detection
+    // Priority 1: Session login
     if (req.session && req.session.phone) {
       customer = customerSvc.findCustomerByAny(req.session.phone);
     }
     
-    // Fallback: IP-based detection
+    // Priority 2: Query search param
+    if (!customer && searchQuery) {
+      customer = customerSvc.findCustomerByAny(searchQuery);
+    }
+    
+    // Priority 3: IP-based detection
+    let clientIp = '';
     if (!customer) {
       const rawIp = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() 
                   || req.ip 
-                  || req.connection.remoteAddress 
+                  || req.connection?.remoteAddress 
                   || '';
+      clientIp = rawIp.replace(/^::ffff:/, '').trim();
       
-      // Clean IPv6 prefix (::ffff:192.168.1.1 -> 192.168.1.1)
-      const cleanIp = rawIp.replace(/^::ffff:/, '').trim();
-      
-      if (cleanIp) {
+      if (clientIp) {
         const allCustomers = customerSvc.getAllCustomers();
         customer = allCustomers.find(c => 
-          (c.static_ip && c.static_ip === cleanIp) || 
-          (c.pppoe_remote_address && c.pppoe_remote_address === cleanIp)
+          (c.static_ip && c.static_ip === clientIp) || 
+          (c.pppoe_remote_address && c.pppoe_remote_address === clientIp)
         );
+        
+        // MikroTik active PPP session lookup if still not found
+        if (!customer && mikrotikService && typeof mikrotikService.getPppoeActive === 'function') {
+          try {
+            const activeUsers = await mikrotikService.getPppoeActive();
+            if (Array.isArray(activeUsers)) {
+              const match = activeUsers.find(u => u.address === clientIp);
+              if (match && match.name) {
+                customer = customerSvc.findCustomerByAny(match.name);
+              }
+            }
+          } catch (e) {
+            // Ignore Mikrotik query error
+          }
+        }
       }
     }
     
-    // 2. If customer found and active, redirect to dashboard
-    if (customer && customer.status === 'active') {
+    // Check unpaid invoices
+    let invoicesWithTokens = [];
+    if (customer) {
+      const unpaidInvoices = billingSvc.getUnpaidInvoicesByCustomerId(customer.id);
+      if (unpaidInvoices && unpaidInvoices.length > 0) {
+        const tokenUtil = require('./utils/tokenUtil');
+        invoicesWithTokens = unpaidInvoices.map(inv => ({
+          ...inv,
+          publicToken: tokenUtil.signPublicToken({
+            invoiceId: inv.id,
+            customerId: inv.customer_id,
+            lookup: customer.phone || customer.pppoe_username || String(customer.id),
+            exp: Date.now() + 60 * 60 * 1000  // 60 minutes
+          }, settings.session_secret)
+        }));
+      }
+    }
+    
+    // If customer is found, active, and has no unpaid invoices, redirect to dashboard
+    if (customer && customer.status === 'active' && invoicesWithTokens.length === 0) {
       return res.redirect('/customer/dashboard');
     }
     
-    // 3. If suspended, get unpaid invoices
-    let invoicesWithTokens = [];
-    if (customer && customer.status === 'suspended') {
-      invoices = billingSvc.getUnpaidInvoicesByCustomerId(customer.id);
-      
-      // 4. Generate public tokens for each invoice
-      const tokenUtil = require('./utils/tokenUtil');
-      invoicesWithTokens = invoices.map(inv => ({
-        ...inv,
-        publicToken: tokenUtil.signPublicToken({
-          invoiceId: inv.id,
-          customerId: inv.customer_id,
-          lookup: customer.phone,
-          exp: Date.now() + 15 * 60 * 1000  // 15 minutes
-        }, settings.session_secret)
-      }));
-    }
-    
-    // 5. Get active payment channels
-    const paymentChannels = getActivePaymentChannelsForIsolated(settings);
-    
+    // Resolve active gateway
+    const paymentSvc = require('./services/paymentService');
+    const sampleAmount = invoicesWithTokens[0] ? invoicesWithTokens[0].amount : 50000;
+    const activeGateway = paymentSvc.resolveConfiguredGatewayForAmount(settings, sampleAmount) || 'qris_static';
+
     res.render('isolated', {
       company: settings.company_header || 'My ISP',
-      adminPhone: settings.company_phone || '',
+      adminPhone: settings.company_phone || settings.company_whatsapp || '',
       address: settings.company_address || '',
       customer: customer || null,
       invoices: invoicesWithTokens,
-      paymentChannels: paymentChannels,
-      settings: settings,
+      searchQuery,
+      clientIp,
+      activeGateway,
+      settings,
       hasUnpaidInvoices: invoicesWithTokens.length > 0
     });
   } catch (err) {
@@ -1167,20 +1293,25 @@ app.get('/isolated', (req, res) => {
       address: settings.company_address || '',
       customer: null,
       invoices: [],
-      paymentChannels: [],
-      settings: settings,
+      searchQuery: '',
+      clientIp: '',
+      activeGateway: 'qris_static',
+      settings,
       hasUnpaidInvoices: false
     });
   }
 });
 
-// NEW ENDPOINT: GET /isolated/status - untuk polling status pelanggan
+// GET /isolated/status - untuk polling status pelanggan real-time
 app.get('/isolated/status', (req, res) => {
   try {
     let customer = null;
+    const queryLookup = String(req.query.q || req.query.cid || req.query.phone || '').trim();
     
-    // Detection: Session atau IP
-    if (req.session && req.session.phone) {
+    // Detection: Query, Session, atau IP
+    if (queryLookup) {
+      customer = customerSvc.findCustomerByAny(queryLookup);
+    } else if (req.session && req.session.phone) {
       customer = customerSvc.findCustomerByAny(req.session.phone);
     } else {
       const rawIp = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() 
@@ -1206,19 +1337,223 @@ app.get('/isolated/status', (req, res) => {
     }
     
     const unpaidInvoices = billingSvc.getUnpaidInvoicesByCustomerId(customer.id);
+    const isClean = customer.status === 'active' || unpaidInvoices.length === 0;
     
     res.json({
-      status: customer.status,  // 'active' atau 'suspended'
+      status: isClean ? 'active' : customer.status,
       unpaid_count: unpaidInvoices.length,
       customer_id: customer.id,
       customer_name: customer.name,
-      message: customer.status === 'active' 
-        ? 'Layanan aktif, silakan login ke dashboard'
+      message: isClean 
+        ? 'Layanan aktif, pembayaran telah selesai'
         : `Tersisa ${unpaidInvoices.length} tagihan belum dibayar`
     });
   } catch (e) {
     logger.error(`[ISOLATED-STATUS] Error: ${e.message}`);
     res.status(500).json({ error: 'Server error', status: 'error' });
+  }
+});
+
+// POST /isolated/quick-qris/:invoiceId - Generate / fetch Quick QRIS transaction
+app.post('/isolated/quick-qris/:invoiceId', async (req, res) => {
+  try {
+    const settings = getSettingsWithCache();
+    const token = req.body.token || req.query.t;
+    const tokenUtil = require('./utils/tokenUtil');
+    const payload = tokenUtil.verifyPublicToken(token, settings.session_secret);
+    
+    if (!payload || String(payload.invoiceId) !== String(req.params.invoiceId)) {
+      return res.status(401).json({ success: false, message: 'Token pembayaran tidak valid atau sudah kadaluarsa. Silakan refresh halaman.' });
+    }
+    
+    const inv = billingSvc.getInvoiceById(req.params.invoiceId);
+    if (!inv) return res.status(404).json({ success: false, message: 'Tagihan tidak ditemukan' });
+    if (inv.status === 'paid') return res.json({ success: false, paid: true, message: 'Tagihan ini sudah lunas!' });
+    
+    const cust = customerSvc.getCustomerById(inv.customer_id);
+    if (!cust) return res.status(404).json({ success: false, message: 'Pelanggan tidak ditemukan' });
+
+    const paymentSvc = require('./services/paymentService');
+    const gateway = paymentSvc.resolveConfiguredGatewayForAmount(settings, inv.amount);
+    if (!gateway) {
+      return res.status(400).json({ success: false, message: 'Metode pembayaran QRIS belum dikonfigurasi di server.' });
+    }
+
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+    const host = req.get('host');
+    const appUrl = settings.app_url || `${protocol}://${host}`;
+    const QRCode = require('qrcode');
+    const periodText = `${inv.period_month}/${inv.period_year}`;
+
+    // 1. QRIS STATIS (LOKAL)
+    if (gateway === 'qris_static') {
+      const customerPortalRouter = require('./routes/customerPortal');
+      let uniqueCode = inv.qris_unique_code || 0;
+      let amountUnique = inv.qris_amount_unique || inv.amount;
+      
+      if (typeof customerPortalRouter.ensureInvoiceQrisUnique === 'function') {
+        const ensured = customerPortalRouter.ensureInvoiceQrisUnique(inv, false);
+        if (ensured) {
+          uniqueCode = ensured.uniqueCode;
+          amountUnique = ensured.amountUnique;
+        }
+      }
+
+      let qrDataUrl = '';
+      if (typeof customerPortalRouter.getStaticQrisQrUrlForAmount === 'function') {
+        qrDataUrl = await customerPortalRouter.getStaticQrisQrUrlForAmount(settings, amountUnique);
+      }
+      if (!qrDataUrl && settings.qris_static_qr_url) {
+        qrDataUrl = settings.qris_static_qr_url;
+      }
+
+      return res.json({
+        success: true,
+        gateway: 'qris_static',
+        gatewayName: 'QRIS',
+        invoiceId: inv.id,
+        amount: amountUnique,
+        nominalAsli: inv.amount,
+        uniqueCode: uniqueCode,
+        qrDataUrl: qrDataUrl,
+        periodText,
+        customerName: cust.name,
+        helpText: 'Pastikan mentransfer sesuai nominal tepat (termasuk kode unik) agar pembayaran langsung terdeteksi.'
+      });
+    }
+
+    // 2. TRIPAY
+    if (gateway === 'tripay') {
+      const result = await paymentSvc.createTripayTransaction(inv, cust, 'QRIS', appUrl, {
+        callbackPath: '/customer/payment/callback',
+        returnPath: '/isolated'
+      });
+
+      let qrDataUrl = '';
+      if (result.payload?.qr_string) {
+        qrDataUrl = await QRCode.toDataURL(result.payload.qr_string, { errorCorrectionLevel: 'M', margin: 1, width: 340 });
+      } else if (result.payload?.qr_url) {
+        qrDataUrl = result.payload.qr_url;
+      }
+
+      billingSvc.updatePaymentInfo(inv.id, {
+        gateway: 'tripay',
+        order_id: result.order_id,
+        link: result.link,
+        reference: result.reference,
+        payload: result.payload
+      });
+
+      return res.json({
+        success: true,
+        gateway: 'tripay',
+        gatewayName: 'Tripay QRIS',
+        invoiceId: inv.id,
+        amount: inv.amount,
+        checkoutUrl: result.link,
+        qrDataUrl: qrDataUrl,
+        reference: result.reference,
+        periodText,
+        customerName: cust.name,
+        helpText: 'Scan kode QRIS di atas dengan m-Banking (BCA, BRI, Mandiri, dll) atau E-Wallet (DANA, OVO, GoPay, ShopeePay).'
+      });
+    }
+
+    // 3. MIDTRANS
+    if (gateway === 'midtrans') {
+      const result = await paymentSvc.createMidtransTransaction(inv, cust, 'QRIS', appUrl, {
+        callbackPath: '/customer/payment/callback',
+        returnPath: '/isolated'
+      });
+
+      billingSvc.updatePaymentInfo(inv.id, {
+        gateway: 'midtrans',
+        order_id: result.order_id,
+        link: result.link,
+        reference: result.reference,
+        payload: result.payload
+      });
+
+      return res.json({
+        success: true,
+        gateway: 'midtrans',
+        gatewayName: 'Midtrans QRIS',
+        invoiceId: inv.id,
+        amount: inv.amount,
+        checkoutUrl: result.link,
+        reference: result.reference,
+        periodText,
+        customerName: cust.name,
+        helpText: 'Buka link checkout Midtrans untuk menyelesaikan pembayaran via QRIS / GoPay.'
+      });
+    }
+
+    // 4. DUITKU
+    if (gateway === 'duitku') {
+      const result = await paymentSvc.createDuitkuTransaction(inv, cust, 'QRIS', appUrl, {
+        callbackPath: '/customer/payment/callback',
+        returnPath: '/isolated'
+      });
+
+      let qrDataUrl = '';
+      if (result.payload?.qrCode) {
+        qrDataUrl = await QRCode.toDataURL(result.payload.qrCode, { errorCorrectionLevel: 'M', margin: 1, width: 340 });
+      }
+
+      billingSvc.updatePaymentInfo(inv.id, {
+        gateway: 'duitku',
+        order_id: result.order_id,
+        link: result.link,
+        reference: result.reference,
+        payload: result.payload
+      });
+
+      return res.json({
+        success: true,
+        gateway: 'duitku',
+        gatewayName: 'Duitku QRIS',
+        invoiceId: inv.id,
+        amount: inv.amount,
+        checkoutUrl: result.link,
+        qrDataUrl: qrDataUrl,
+        periodText,
+        customerName: cust.name,
+        helpText: 'Scan QRIS di atas melalui m-Banking atau aplikasi E-Wallet Anda.'
+      });
+    }
+
+    // 5. XENDIT
+    if (gateway === 'xendit') {
+      const result = await paymentSvc.createXenditTransaction(inv, cust, 'xendit', appUrl, {
+        callbackPath: '/customer/payment/callback',
+        returnPath: '/isolated'
+      });
+
+      billingSvc.updatePaymentInfo(inv.id, {
+        gateway: 'xendit',
+        order_id: result.order_id,
+        link: result.link,
+        reference: result.reference,
+        payload: result.payload
+      });
+
+      return res.json({
+        success: true,
+        gateway: 'xendit',
+        gatewayName: 'Xendit Invoice',
+        invoiceId: inv.id,
+        amount: inv.amount,
+        checkoutUrl: result.link,
+        periodText,
+        customerName: cust.name,
+        helpText: 'Klik tombol bayar untuk membuka halaman pembayaran resmi Xendit.'
+      });
+    }
+
+    return res.status(400).json({ success: false, message: 'Gateway ' + gateway + ' belum didukung untuk Quick QRIS.' });
+  } catch (err) {
+    logger.error(`[QuickQRIS] Error: ${err.message}`);
+    res.status(500).json({ success: false, message: err.message || 'Gagal memproses pembayaran QRIS' });
   }
 });
 
@@ -1303,26 +1638,37 @@ app.get(['/privacy-policy', '/privacy', '/kebijakan-privasi', '/privacy.html'], 
   });
 });
 
-// Route download APK Android Pelanggan
-app.get(['/download/app', '/download/apk', '/downloads/AlijayaCustomer.apk', '/download/AlijayaCustomer.apk'], (req, res) => {
-  const apkPath = path.join(__dirname, 'public', 'downloads', 'AlijayaCustomer.apk');
-  const fallbackPath = path.join(__dirname, 'AlijayaCustomer.apk');
+// Route: Syarat & Ketentuan (Terms of Service / TOS) untuk Google Play Store & Pelanggan
+app.get(['/terms-of-service', '/terms', '/tos', '/syarat-ketentuan', '/terms.html'], (req, res) => {
+  const { getSetting, getSettings } = require('./config/settingsManager');
+  const company = getSetting('company_header', 'ALIJAYA NET');
+  const settings = getSettings ? getSettings() : {};
+  res.render('tos', {
+    company,
+    settings,
+    isLoggedIn: false
+  });
+});
 
-  let targetPath = null;
-  if (fs.existsSync(apkPath)) {
-    targetPath = apkPath;
-  } else if (fs.existsSync(fallbackPath)) {
-    targetPath = fallbackPath;
-  }
+// Route download APK Android Pelanggan & Admin
+app.get(['/download/app', '/download/apk', '/downloads/billing-rtrw.apk', '/download/billing-rtrw.apk', '/downloads/AlijayaCustomer.apk', '/download/AlijayaCustomer.apk'], (req, res) => {
+  const candidates = [
+    path.join(__dirname, 'public', 'downloads', 'billing-rtrw.apk'),
+    path.join(__dirname, 'billing-rtrw.apk'),
+    path.join(__dirname, 'public', 'downloads', 'AlijayaCustomer.apk'),
+    path.join(__dirname, 'AlijayaCustomer.apk')
+  ];
+
+  const targetPath = candidates.find(p => fs.existsSync(p));
 
   if (targetPath) {
     res.setHeader('Content-Type', 'application/vnd.android.package-archive');
-    return res.download(targetPath, 'AlijayaCustomer.apk');
+    return res.download(targetPath, 'billing-rtrw.apk');
   }
 
   return res.status(404).json({
     success: false,
-    message: 'File APK belum di-upload ke server VPS. Silakan upload file AlijayaCustomer.apk ke folder public/downloads/ di server.'
+    message: 'File APK belum di-upload ke server VPS. Silakan upload file billing-rtrw.apk ke folder public/downloads/ di server.'
   });
 });
 
@@ -1577,6 +1923,22 @@ app.post(['/donasi/confirm', '/api/donasi/confirm'], async (req, res) => {
 // Mount built-in ACS server endpoint (TR-069)
 const acsServerService = require('./services/acsServerService');
 app.post('/acs', express.raw({ type: ['text/xml', 'application/soap+xml', 'application/xml', 'text/plain'], limit: '2mb' }), acsServerService.handleCwmpRequest);
+
+// Landing page untuk scan QR stiker modem ONU pelanggan
+app.get('/app/connect', (req, res) => {
+  const settings = getSettingsWithCache();
+  const cid = String(req.query.cid || '').trim();
+  const serverUrl = `${req.protocol}://${req.get('host')}`;
+  const companyName = settings.company_header || 'ALIJAYA DIGITAL NETWORK';
+  const companyPhone = settings.company_phone || '';
+  res.render('app_connect', {
+    companyName,
+    companyPhone,
+    serverUrl,
+    cid,
+    settings
+  });
+});
 
 // Mount customer portal
 const customerPortal = require('./routes/customerPortal');
