@@ -16,6 +16,27 @@ const qrisUtil = require('../utils/qrisUtil');
 // Penanda supaya pengingat tidak dobel kirim dalam satu hari.
 let sedangKirimPengingat = false;
 
+// Diisi oleh startCronJobs(). Tombol kirim manual memakai fungsi yang sama
+// dengan cron, supaya perilakunya tidak mungkin berbeda.
+let runnerPengingat = null;
+
+// Kemajuan antrean yang sedang berjalan, dibaca halaman admin.
+const statusPengingat = {
+  berjalan: false, total: 0, terkirim: 0, gagal: 0,
+  mulai: null, selesai: null, sumber: null
+};
+
+/**
+ * Menjalankan pengingat di luar jadwal (tombol manual di panel admin).
+ * opsi: { hariManual: [7,5,3,1], hanyaHitung: true|false }
+ */
+async function jalankanPengingatSekarang(opsi = {}) {
+  if (typeof runnerPengingat !== 'function') {
+    throw new Error('Penjadwal belum aktif. Mulai ulang aplikasi lalu coba lagi.');
+  }
+  return runnerPengingat(Object.assign({ manual: true }, opsi));
+}
+
 function tanggalHariIniLokal() {
   return String(getNowLocal() || '').slice(0, 10); // YYYY-MM-DD sesuai timezone setting
 }
@@ -196,18 +217,25 @@ function startCronJobs() {
   //    Semua pelanggan yang jatuh tempo pada hari pengingat aktif (H-7/H-5/H-3/H-1)
   //    dikumpulkan dulu jadi satu antrean, lalu dikirim berurutan dengan jeda acak
   //    sampai antrean habis pada hari yang sama.
-  const jalankanPengingat = async (susulan) => {
-    if (pengingatSudahJalanHariIni()) return;
+  const jalankanPengingat = async (opsi) => {
+    const { susulan = false, manual = false, hariManual = null, hanyaHitung = false } =
+      (opsi && typeof opsi === 'object') ? opsi : { susulan: !!opsi };
+
+    // Kiriman manual sengaja tidak terhalang penanda harian: admin yang memutuskan.
+    if (!manual && pengingatSudahJalanHariIni()) return;
 
     const enabled = getSetting('whatsapp_auto_billing_enabled', false);
     const waEnabled = getSetting('whatsapp_enabled', false);
     const billingEnabled = getSetting('whatsapp_billing_to_customer_enabled', true);
-    if (!enabled || !waEnabled || !billingEnabled) return;
+    // Toggle pengingat otomatis hanya mengatur jadwal; tombol manual tetap bisa dipakai.
+    if (!manual && (!enabled || !waEnabled || !billingEnabled)) return;
 
     const gatewayType = getSetting('wa_gateway_type', 'baileys');
     const waSvc = require('./whatsappService');
     
-    if (gatewayType === 'meta') {
+    if (hanyaHitung) {
+      // Pratinjau target: tidak mengirim apa pun, koneksi tidak perlu diperiksa.
+    } else if (gatewayType === 'meta') {
       const phoneId = getSetting('meta_phone_number_id', '');
       const token = getSetting('meta_access_token', '');
       if (!phoneId || !token) {
@@ -258,7 +286,10 @@ function startCronJobs() {
 
     const today = new Date();
     const day = today.getDate();
-    const reminderDays = getReminderDays();
+    const reminderDays = (Array.isArray(hariManual) && hariManual.length)
+      ? Array.from(new Set(hariManual.map(Number).filter(n => Number.isFinite(n) && n >= 1 && n <= 60)))
+          .sort((a, b) => b - a)
+      : getReminderDays();
     logger.info('[CRON] Hari pengingat aktif: H-' + reminderDays.join(', H-'));
 
     const customers = customerSvc.getAllCustomers();
@@ -326,6 +357,15 @@ function startCronJobs() {
       targetCustomers.push(c);
     }
 
+    if (hanyaHitung) {
+      const rincian = {};
+      for (const t of targetCustomers) {
+        const k = 'H-' + (t._hMinus || 1);
+        rincian[k] = (rincian[k] || 0) + 1;
+      }
+      return { pratinjau: true, total: targetCustomers.length, rincian, hari: reminderDays };
+    }
+
     if (targetCustomers.length === 0) {
       // Belum ditandai selesai: kalau tagihan baru dibuat siang hari,
       // pengecekan susulan masih bisa menjemputnya hari ini juga.
@@ -342,6 +382,13 @@ function startCronJobs() {
     // Ditandai sebelum mulai mengirim supaya tidak ada pengiriman dobel
     // kalau proses lain ikut terpicu di tengah antrean.
     tandaiPengingatSudahJalan();
+    statusPengingat.berjalan = true;
+    statusPengingat.total = targetCustomers.length;
+    statusPengingat.terkirim = 0;
+    statusPengingat.gagal = 0;
+    statusPengingat.mulai = getNowLocal();
+    statusPengingat.selesai = null;
+    statusPengingat.sumber = manual ? 'tombol manual' : (susulan ? 'susulan' : 'jadwal 07:00');
     logger.info(
       `[CRON] Antrean pengingat tagihan: ${targetCustomers.length} pelanggan, ` +
       `jeda acak ~${Math.round(jedaRata)} detik/pesan, perkiraan selesai ${perkiraanMenit} menit lagi` +
@@ -457,6 +504,7 @@ function startCronJobs() {
             sent++;
             targetCount++;
             batchCount++;
+            statusPengingat.terkirim = sent;
             logger.info(`[CRON] Pengingat ${sent}/${targetCustomers.length} terkirim ke ${c.name || c.phone} (H-${c._hMinus || 1}).`);
           } else {
             throw new Error('Gagal kirim pesan');
@@ -498,22 +546,34 @@ function startCronJobs() {
     }
 
     logger.info(`[CRON] Pengingat tagihan otomatis selesai: target=${targetCount}, terkirim=${sent}, gagal=${failed}`);
+    statusPengingat.berjalan = false;
+    statusPengingat.terkirim = sent;
+    statusPengingat.gagal = failed;
+    statusPengingat.selesai = getNowLocal();
+    return { total: targetCount, terkirim: sent, gagal: failed };
   };
 
   // Pembungkus: cegah dua antrean berjalan bersamaan.
-  const jalankanPengingatAman = async (susulan) => {
-    if (sedangKirimPengingat) return;
-    sedangKirimPengingat = true;
+  const jalankanPengingatAman = async (opsi) => {
+    const cumaHitung = !!(opsi && opsi.hanyaHitung);
+    if (!cumaHitung && sedangKirimPengingat) return { sedangBerjalan: true };
+    if (!cumaHitung) sedangKirimPengingat = true;
     try {
-      await jalankanPengingat(susulan);
+      return await jalankanPengingat(opsi);
     } catch (e) {
       logger.error(`[CRON] Pengingat tagihan berhenti karena error: ${e.message || e}`);
+      statusPengingat.berjalan = false;
+      statusPengingat.selesai = getNowLocal();
+      return { error: e.message || String(e) };
     } finally {
-      sedangKirimPengingat = false;
+      if (!cumaHitung) sedangKirimPengingat = false;
     }
   };
 
-  cron.schedule('0 7 * * *', () => jalankanPengingatAman(false));
+  // Dibuka untuk tombol kirim manual di panel admin.
+  runnerPengingat = jalankanPengingatAman;
+
+  cron.schedule('0 7 * * *', () => jalankanPengingatAman({ susulan: false }));
 
   // 3b. Jaring pengaman. Kalau jam 07:00 server sedang mati, WhatsApp belum
   //     terhubung, atau tagihan baru dibuat siang hari, pengingat hari itu
@@ -522,7 +582,7 @@ function startCronJobs() {
     const jam = jamSekarangLokal();
     if (!Number.isFinite(jam) || jam < 7 || jam >= 20) return;
     if (pengingatSudahJalanHariIni()) return;
-    jalankanPengingatAman(true);
+    jalankanPengingatAman({ susulan: true });
   });
 
   // 4. Jam Kalong (Night Speed) Start - Jam 00:00
@@ -819,4 +879,6 @@ function startCronJobs() {
 module.exports = {
   getReminderDays,
   formatHMinus,
-  getDynamicDelayMs, startCronJobs };
+  getDynamicDelayMs,
+  jalankanPengingatSekarang,
+  statusPengingat, startCronJobs };

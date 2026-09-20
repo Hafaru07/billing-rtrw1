@@ -239,10 +239,143 @@
       </div>
     </div>
 
+    <!-- Kirim pengingat manual ke pelanggan sungguhan -->
+    <div class="card" style="margin-top: 20px;">
+      <div class="card-hd"><h6><i class="bi bi-send-fill"></i> Kirim Pengingat Sekarang (Manual)</h6></div>
+      <div class="card-bd">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
+          Cadangan kalau jadwal otomatis jam 07:00 terlewat &mdash; server mati, WhatsApp belum tersambung,
+          atau tagihan baru dibuat siang hari. Pelanggan dipilih dari tanggal isolir dikurangi H- yang dicentang,
+          dan hanya yang punya tunggakan. Pesannya sama persis dengan pengingat otomatis.
+        </div>
+        <div style="font-size:11px;color:var(--warning);margin-bottom:12px">
+          <i class="bi bi-exclamation-triangle"></i> Ini mengirim WhatsApp ke pelanggan sungguhan.
+          Setelah antrean manual jalan, pengingat otomatis hari ini tidak akan mengirim ulang.
+        </div>
+
+        <label class="fl">Kirim untuk H- berapa saja</label>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" class="km-h" value="7" checked> H-7
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" class="km-h" value="5" checked> H-5
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" class="km-h" value="3" checked> H-3
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" class="km-h" value="1" checked> H-1
+          </label>
+        </div>
+
+        <div id="km_info" style="font-size:12px"></div>
+        <div id="km_progress" style="display:none;margin-top:10px;padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--bg3);font-size:12px"></div>
+      </div>
+      <div class="card-bd" style="border-top:1px solid var(--border);background:var(--bg2);display:flex;justify-content:flex-end;gap:8px">
+        <button type="button" class="btn btn-g" onclick="lihatTargetPengingat()"><i class="bi bi-people"></i> Lihat Target</button>
+        <button type="button" class="btn btn-p" onclick="kirimPengingatSekarang()"><i class="bi bi-send"></i> Kirim Sekarang</button>
+      </div>
+    </div>
+
   </div>
 </div>
 
 <script>
+// ── Kirim pengingat manual ke pelanggan sungguhan ──────────────────────────
+function hMinusTerpilih() {
+  return Array.from(document.querySelectorAll('.km-h:checked')).map(function (el) { return Number(el.value); });
+}
+
+function ringkasRincian(rincian) {
+  const bagian = Object.keys(rincian || {}).sort().map(function (k) { return k + ': ' + rincian[k]; });
+  return bagian.length ? bagian.join(', ') : 'tidak ada';
+}
+
+async function lihatTargetPengingat() {
+  const info = document.getElementById('km_info');
+  info.textContent = 'Menghitung...';
+  try {
+    const res = await fetch('/admin/api/whatsapp/send-reminder-now', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ h_list: hMinusTerpilih(), preview: true })
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+    info.innerHTML = data.total
+      ? '<span style="color:var(--success)">' + data.total + ' pelanggan akan dikirimi pengingat.</span> <span style="color:var(--muted)">(' + ringkasRincian(data.rincian) + ')</span>'
+      : '<span style="color:var(--warning)">Tidak ada pelanggan yang cocok. Pastikan tagihan sudah di-generate dan tanggal isolirnya sesuai.</span>';
+  } catch (e) {
+    info.innerHTML = '<span style="color:var(--danger)">Gagal: ' + e.message + '</span>';
+  }
+}
+
+async function kirimPengingatSekarang() {
+  const info = document.getElementById('km_info');
+  const hari = hMinusTerpilih();
+  if (!hari.length) { info.innerHTML = '<span style="color:var(--danger)">Centang minimal satu H-.</span>'; return; }
+
+  info.textContent = 'Menghitung target...';
+  let jumlah = 0;
+  try {
+    const cek = await fetch('/admin/api/whatsapp/send-reminder-now', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ h_list: hari, preview: true })
+    });
+    const hasil = await cek.json();
+    if (!hasil.ok) throw new Error(hasil.error);
+    jumlah = hasil.total;
+  } catch (e) {
+    info.innerHTML = '<span style="color:var(--danger)">Gagal: ' + e.message + '</span>';
+    return;
+  }
+
+  if (!jumlah) {
+    info.innerHTML = '<span style="color:var(--warning)">Tidak ada pelanggan yang cocok, tidak ada yang dikirim.</span>';
+    return;
+  }
+  if (!confirm('Kirim pengingat WhatsApp ke ' + jumlah + ' pelanggan sungguhan (H-' + hari.join(', H-') + ')?\n\nPengiriman berjeda acak, jadi butuh waktu lama untuk selesai.')) return;
+
+  try {
+    const res = await fetch('/admin/api/whatsapp/send-reminder-now', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ h_list: hari, preview: false })
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+    info.innerHTML = '<span style="color:var(--success)">Antrean dimulai untuk ' + data.total + ' pelanggan.</span>';
+    pantauAntrean();
+  } catch (e) {
+    info.innerHTML = '<span style="color:var(--danger)">Gagal: ' + e.message + '</span>';
+  }
+}
+
+let timerAntrean = null;
+async function pantauAntrean() {
+  const box = document.getElementById('km_progress');
+  box.style.display = 'block';
+  const tarik = async function () {
+    try {
+      const res = await fetch('/admin/api/whatsapp/reminder-status', { headers: { 'Accept': 'application/json' } });
+      const data = await res.json();
+      const st = (data && data.status) || {};
+      const persen = st.total ? Math.round((st.terkirim / st.total) * 100) : 0;
+      box.innerHTML =
+        '<b>' + (st.berjalan ? 'Sedang mengirim' : 'Antrean selesai') + '</b> &mdash; ' +
+        (st.terkirim || 0) + '/' + (st.total || 0) + ' (' + persen + '%)' +
+        (st.gagal ? ', gagal ' + st.gagal : '') +
+        (st.sumber ? '<br><span style="color:var(--muted)">sumber: ' + st.sumber + ', mulai ' + (st.mulai || '-') + '</span>' : '');
+      if (!st.berjalan && timerAntrean) { clearInterval(timerAntrean); timerAntrean = null; }
+    } catch (e) { /* diamkan, coba lagi di tarikan berikutnya */ }
+  };
+  await tarik();
+  if (timerAntrean) clearInterval(timerAntrean);
+  timerAntrean = setInterval(tarik, 10000);
+}
+
 // Uji coba pesan pengingat. preview=true hanya menampilkan hasil, tidak mengirim.
 async function ujiPengingat(preview) {
   const info = document.getElementById('tr_info');

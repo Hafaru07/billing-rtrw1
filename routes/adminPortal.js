@@ -6482,6 +6482,58 @@ router.post('/whatsapp/auto-billing', requireAdminSession, express.urlencoded({ 
 // Mengirim SATU pesan ke nomor yang diketik admin, memakai template pengingat
 // yang tersimpan. Dipakai untuk memastikan format pesan sudah benar sebelum
 // dikirim massal. Tidak menyentuh data pelanggan.
+// ─── KIRIM PENGINGAT MANUAL ─────────────────────────────────────────────────
+// Cadangan kalau jadwal 07:00 terlewat (server mati, WhatsApp belum konek,
+// tagihan baru dibuat siang hari). Memakai fungsi pengiriman yang sama persis
+// dengan cron, hanya hari H- nya yang ditentukan admin.
+router.post('/api/whatsapp/send-reminder-now', requireAdminSession, restrictToAdmin, express.json({ limit: '256kb' }), async (req, res) => {
+  try {
+    const cronSvc = require('../services/cronService');
+
+    const daftar = Array.isArray(req.body && req.body.h_list) ? req.body.h_list : [];
+    const hariManual = Array.from(new Set(
+      daftar.map(function (v) { return parseInt(v, 10); })
+        .filter(function (n) { return Number.isFinite(n) && n >= 1 && n <= 60; })
+    )).sort(function (a, b) { return b - a; });
+    if (!hariManual.length) throw new Error('Pilih minimal satu H- dulu (H-7/H-5/H-3/H-1).');
+
+    // Selalu hitung target dulu, supaya admin tahu berapa yang akan dikirimi.
+    const hitung = await cronSvc.jalankanPengingatSekarang({ hariManual, hanyaHitung: true });
+    const total = Number((hitung && hitung.total) || 0);
+    const rincian = (hitung && hitung.rincian) || {};
+
+    if (req.body && req.body.preview) {
+      return res.json({ ok: true, preview: true, total, rincian, hari: hariManual });
+    }
+
+    if (!total) throw new Error('Tidak ada pelanggan yang cocok untuk H- yang dipilih. Pastikan tagihan sudah di-generate.');
+    if (cronSvc.statusPengingat && cronSvc.statusPengingat.berjalan) {
+      throw new Error('Masih ada antrean pengingat yang berjalan. Tunggu sampai selesai.');
+    }
+
+    // Antrean bisa makan waktu berjam-jam, jadi jangan menahan permintaan HTTP.
+    // Kemajuannya dibaca lewat /api/whatsapp/reminder-status.
+    cronSvc.jalankanPengingatSekarang({ hariManual }).catch(function (e) {
+      logger.error('[KirimManual] Antrean berhenti: ' + (e.message || e));
+    });
+    logger.info('[KirimManual] Antrean pengingat dimulai untuk ' + total + ' pelanggan (H-' + hariManual.join(', H-') + ').');
+
+    res.json({ ok: true, preview: false, total, rincian, hari: hariManual });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+// Kemajuan antrean pengingat yang sedang berjalan.
+router.get('/api/whatsapp/reminder-status', requireAdminSession, restrictToAdmin, (req, res) => {
+  try {
+    const cronSvc = require('../services/cronService');
+    res.json({ ok: true, status: cronSvc.statusPengingat || {} });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
 router.post('/api/whatsapp/test-reminder', requireAdminSession, restrictToAdmin, express.json({ limit: '256kb' }), async (req, res) => {
   try {
     const nomorRaw = String((req.body && req.body.phone) || '').trim();
