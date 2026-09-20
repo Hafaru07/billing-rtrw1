@@ -320,7 +320,12 @@ function startCronJobs() {
       if (digits.startsWith('0')) digits = '62' + digits.slice(1);
       if (seenPhones.has(digits)) continue;
 
-      const isPrepaid = c.package_billing_type === 'prepaid';
+      const unpaidCount = Number(c.unpaid_count || 0) || 0;
+      // Pelanggan yang punya tagihan belum lunas selalu diingatkan memakai
+      // tanggal isolir, apa pun jenis paketnya. Banyak paket ditandai
+      // "prepaid" padahal penagihannya tetap bulanan lewat tanggal isolir,
+      // dan kalau dipaksa memakai expired_at pelanggan tidak pernah cocok.
+      const isPrepaid = c.package_billing_type === 'prepaid' && unpaidCount === 0;
       let shouldSend = false;
 
       if (isPrepaid) {
@@ -336,7 +341,6 @@ function startCronJobs() {
           }
         }
       } else {
-        const unpaidCount = Number(c.unpaid_count || 0) || 0;
         if (unpaidCount > 0) {
           const dueDay = Number(c.isolate_day || 0) || Number(getSetting('isolir_day', 10) || 10) || 10;
           // Cocokkan hari ini dengan salah satu hari pengingat aktif (H-7/H-5/H-3/H-1).
@@ -417,6 +421,9 @@ function startCronJobs() {
           // Process Dynamic QRIS if enabled & available
           let qrisImageBuffer = null;
           let finalTagihanStr = totalTagihan.toLocaleString('id-ID');
+          // Nominal apa adanya, tanpa kode unik QRIS. Dipakai variabel
+          // {{harganoqris}} untuk pesan pengingat yang tidak butuh kode bayar.
+          const tagihanTanpaKodeStr = totalTagihan.toLocaleString('id-ID');
 
           if (unpaidInvoices.length > 0) {
             try {
@@ -487,6 +494,7 @@ function startCronJobs() {
           let formattedMsg = template
             .replace(/{{nama}}/gi, c.name || 'Pelanggan')
             .replace(/{{tagihan}}/gi, finalTagihanStr)
+            .replace(/{{harganoqris}}/gi, tagihanTanpaKodeStr)
             .replace(/{{rincian}}/gi, rincianBulan || '-')
             .replace(/{{paket}}/gi, c.package_name || '-')
             .replace(/{{link}}/gi, loginLink)

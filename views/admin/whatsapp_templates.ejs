@@ -53,7 +53,13 @@
               <label class="fl">Template Pengingat Tagihan (Bulanan / Manual)</label>
               <textarea class="fc" id="tmpl_auto_billing" name="whatsapp_auto_billing_message" rows="8" required style="width: 100%;"><%= templates.whatsapp_auto_billing_message %></textarea>
               <div style="font-size: 11px; color: var(--muted); margin-top: 6px; display:flex; justify-between; align-items:center;">
-                <span><i class="bi bi-info-circle"></i> Variabel: <b>{{nama}}</b>, <b>{{tagihan}}</b>, <b>{{rincian}}</b>, <b>{{paket}}</b>, <b>{{link}}</b>.</span>
+                <span><i class="bi bi-info-circle"></i> Variabel: <b>{{nama}}</b>, <b>{{tagihan}}</b>, <b>{{harganoqris}}</b>, <b>{{rincian}}</b>, <b>{{paket}}</b>, <b>{{link}}</b>, <b>{{h-}}</b>.</span>
+                <span style="display:block;margin-top:6px;color:var(--muted)">
+                  <b>{{tagihan}}</b> memuat kode unik QRIS supaya pembayaran bisa dicocokkan otomatis, contoh <i>150.247</i>.
+                  <b>{{harganoqris}}</b> menampilkan nominal apa adanya tanpa kode unik, contoh <i>150.000</i> &mdash;
+                  pakai ini untuk pesan pengingat yang tujuannya sekadar memberi tahu, bukan menagih pembayaran.
+                  <b>{{h-}}</b> otomatis jadi <i>(7 Hari Sebelum)</i>, <i>(5 Hari Sebelum)</i>, dan seterusnya sesuai jadwal yang sedang berjalan.
+                </span>
               </div>
             </div>
             

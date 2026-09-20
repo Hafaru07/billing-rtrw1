@@ -6554,7 +6554,8 @@ router.post('/api/whatsapp/test-reminder', requireAdminSession, restrictToAdmin,
 
     const pesan = template
       .replace(/{{nama}}/gi, namaContoh)
-      .replace(/{{tagihan}}/gi, '150.000')
+      .replace(/{{tagihan}}/gi, '150.247')
+      .replace(/{{harganoqris}}/gi, '150.000')
       .replace(/{{rincian}}/gi, '9/2026')
       .replace(/{{paket}}/gi, 'Paket Uji 10 Mbps')
       .replace(/{{link}}/gi, link)
