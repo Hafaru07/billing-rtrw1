@@ -388,6 +388,23 @@
     .cp-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 12px; color: #64748b; background: rgba(255,255,255,0.75); backdrop-filter: blur(2px); opacity: 0; pointer-events: none; }
     .cp-overlay.on { opacity: 1; }
     .popup-actions { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
+    /* Popup Leaflet selalu berlatar putih, sedangkan .btn-g bawaan admin.css
+       dibuat untuk tema gelap (putih 6% transparan) sehingga tombolnya tidak
+       kelihatan sama sekali. Di dalam popup semua tombol diberi latar solid. */
+    .popup-actions .btn { font-weight: 700; border-radius: 8px; }
+    .popup-actions .btn-g,
+    .popup-actions a.btn-g { background: #475569; border: 1px solid #475569; color: #fff !important; }
+    .popup-actions .btn-g:hover,
+    .popup-actions a.btn-g:hover { background: #334155; border-color: #334155; color: #fff !important; }
+    /* Tombol gambar jalur diberi warna cyan, senada dengan garis kabel antar tiang. */
+    .popup-actions .btn-jalur { background: #0891b2; border: 1px solid #0891b2; color: #fff !important; }
+    .popup-actions .btn-jalur:hover { background: #0e7490; border-color: #0e7490; color: #fff !important; }
+    /* Tabel di panel bawah juga berlatar terang, jadi .btn-g bawaan tema gelap
+       ikut tidak terlihat di kolom Aksi. */
+    .data-tabs-panel .btn-g { background: #475569; border: 1px solid #475569; color: #fff !important; }
+    .data-tabs-panel .btn-g:hover { background: #334155; border-color: #334155; color: #fff !important; }
+    .btn-jalur { background: #0891b2; border: 1px solid #0891b2; color: #fff !important; }
+    .btn-jalur:hover { background: #0e7490; border-color: #0e7490; color: #fff !important; }
     .btn-wa { background: #25D366; border: 1px solid #25D366; color: #0b1220 !important; font-weight: 800; }
     .btn-wa:hover { background: #1fb85a; border-color: #1fb85a; color: #0b1220 !important; }
 
@@ -699,7 +716,22 @@
     <!-- The Map Container -->
     <div id="map"></div>
 
-    <!-- Bottom Tabbed Panel: ONU Pelanggan & ODP -->
+    <%
+      // Data pendukung tab Daftar Tiang: nama induk tiap objek dan berapa
+      // objek yang menginduk ke tiang tersebut.
+      const tiangList = (netNodes || []).filter(function (n) { return n.type === 'pole'; });
+      const namaObjek = {};
+      (netNodes || []).forEach(function (n) { namaObjek['node:' + n.id] = n.name; });
+      (odps || []).forEach(function (o) { namaObjek['odp:' + o.id] = o.name; });
+      const jumlahAnak = {};
+      (netNodes || []).forEach(function (n) {
+        if (n.parent_kind === 'node' && n.parent_id) jumlahAnak[n.parent_id] = (jumlahAnak[n.parent_id] || 0) + 1;
+      });
+      (odps || []).forEach(function (o) {
+        if (o.parent_node_id) jumlahAnak[o.parent_node_id] = (jumlahAnak[o.parent_node_id] || 0) + 1;
+      });
+    %>
+    <!-- Bottom Tabbed Panel: ONU Pelanggan, ODP & Tiang -->
     <div class="data-tabs-panel">
       <div class="data-tabs-nav">
         <button type="button" class="tab-btn active" onclick="switchDataTab('onu-tab', this)">
@@ -711,6 +743,11 @@
           <i class="bi bi-box-seam-fill"></i>
           <span>Daftar ODP (Box)</span>
           <span class="tab-badge"><%= odps.length %></span>
+        </button>
+        <button type="button" class="tab-btn" onclick="switchDataTab('tiang-tab', this)">
+          <i class="bi bi-broadcast-pin"></i>
+          <span>Daftar Tiang</span>
+          <span class="tab-badge"><%= tiangList.length %></span>
         </button>
       </div>
 
@@ -860,6 +897,76 @@
                 <% }) %>
               <% } else { %>
                 <tr><td colspan="4" style="padding: 16px; text-align: center; color: #64748b;">Belum ada data ODP.</td></tr>
+              <% } %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- TAB 3: DAFTAR TIANG -->
+      <div id="tiang-tab" class="tab-content">
+        <div class="panel-filter-bar">
+          <input id="tiangSearch" class="table-search-input" type="text" placeholder="Cari tiang (nama / induk)...">
+          <button type="button" class="btn btn-p btn-sm" onclick="startPlaceNode('pole')"><i class="bi bi-plus-circle"></i> Tambah Tiang</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Nama Tiang</th>
+                <th>Induk</th>
+                <th>Koordinat</th>
+                <th>Bisa Dipasangi ODP</th>
+                <th>Menopang</th>
+                <th style="width: 170px; text-align: right;">Aksi</th>
+              </tr>
+            </thead>
+            <tbody id="tiangTbody">
+              <% if (tiangList.length > 0) { %>
+                <% tiangList.forEach(function (n) { %>
+                  <% const indukNama = n.parent_id ? (namaObjek[n.parent_kind + ':' + n.parent_id] || '(induk sudah dihapus)') : ''; %>
+                  <% const anak = jumlahAnak[n.id] || 0; %>
+                  <tr data-name="<%= String(n.name || '').toLowerCase() %>" data-parent="<%= String(indukNama).toLowerCase() %>">
+                    <td>
+                      <div style="font-weight: 800; color: #0f172a;">
+                        <i class="bi bi-broadcast-pin me-1" style="color: <%= n.can_host_odp ? '#3b82f6' : '#64748b' %>"></i> <%= n.name %>
+                      </div>
+                    </td>
+                    <td>
+                      <% if (indukNama) { %>
+                        <div style="font-size: 12px; color: #334155; font-weight: 700;"><%= indukNama %></div>
+                        <div style="font-size: 11px; color: #94a3b8;"><%= n.parent_kind === 'odp' ? 'ODP' : 'Objek jaringan' %></div>
+                      <% } else { %>
+                        <div style="font-size: 12px; color: #ef4444; font-weight: 700;">Belum punya induk</div>
+                      <% } %>
+                    </td>
+                    <td>
+                      <div style="font-size: 11.5px; font-family: monospace; color: #334155; font-weight: 700;">
+                        <%= (Number(n.lat) || 0).toFixed(6) %>, <%= (Number(n.lng) || 0).toFixed(6) %>
+                      </div>
+                    </td>
+                    <td>
+                      <% if (n.can_host_odp) { %>
+                        <span style="font-size: 11px; font-weight: 800; color: #1d4ed8; background: #dbeafe; padding: 3px 8px; border-radius: 999px;">Ya</span>
+                      <% } else { %>
+                        <span style="font-size: 11px; font-weight: 800; color: #475569; background: #e2e8f0; padding: 3px 8px; border-radius: 999px;">Tiang distribusi</span>
+                      <% } %>
+                    </td>
+                    <td>
+                      <div style="font-size: 12px; color: <%= anak ? '#0f172a' : '#94a3b8' %>; font-weight: 700;"><%= anak %> objek</div>
+                    </td>
+                    <td>
+                      <div style="display: flex; gap: 4px; justify-content: flex-end;">
+                        <button type="button" class="btn btn-sm btn-p" data-node-id="<%= Number(n.id) %>" onclick="editTiangFromBtn(this)" title="Edit"><i class="bi bi-pencil"></i></button>
+                        <button type="button" class="btn btn-sm btn-jalur" data-node-id="<%= Number(n.id) %>" onclick="cableTiangFromBtn(this)" title="Gambar Jalur"><i class="bi bi-bezier2"></i></button>
+                        <button type="button" class="btn btn-sm btn-g" data-node-id="<%= Number(n.id) %>" onclick="focusTiangFromBtn(this)" title="Fokus Peta"><i class="bi bi-geo-alt"></i></button>
+                        <button type="button" class="btn btn-sm btn-d" data-node-id="<%= Number(n.id) %>" data-node-name="<%= n.name %>" data-node-children="<%= anak %>" onclick="deleteTiangFromBtn(this)" title="Hapus"><i class="bi bi-trash"></i></button>
+                      </div>
+                    </td>
+                  </tr>
+                <% }) %>
+              <% } else { %>
+                <tr><td colspan="6" style="padding: 16px; text-align: center; color: #64748b;">Belum ada tiang. Tambahkan lewat tombol di atas atau menu Tambah Tiang di header peta.</td></tr>
               <% } %>
             </tbody>
           </table>
@@ -1108,7 +1215,7 @@
           <div><strong>${I18N.popupLocation}:</strong> ${lat.toFixed(6)}, ${lng.toFixed(6)}</div>
           <div class="popup-actions" style="margin-top: 10px;">
             <button class="btn btn-sm btn-p" onclick='editOdp(${JSON.stringify(odp)})'><i class="bi bi-pencil me-1"></i>${I18N.popupEdit}</button>
-            ${(odp.parent_node_id || odp.parent_odp_id) ? `<button class="btn btn-sm btn-g" onclick="startOdpCableDrawing(${odp.id})"><i class="bi bi-bezier2 me-1"></i>Gambar Jalur</button>` : ''}
+            ${(odp.parent_node_id || odp.parent_odp_id) ? `<button class="btn btn-sm btn-jalur" onclick="startOdpCableDrawing(${odp.id})"><i class="bi bi-bezier2 me-1"></i>Gambar Jalur</button>` : ''}
           </div>
         </div>
       `);
@@ -1927,6 +2034,66 @@
     focusOdp(btn.dataset.odpId);
   }
 
+  // ── Aksi pada tab Daftar Tiang ─────────────────────────────────────────────
+  function editTiangFromBtn(btn) {
+    if (!btn || !btn.dataset) return;
+    openNetNodeModal(null, null, null, Number(btn.dataset.nodeId));
+  }
+
+  function cableTiangFromBtn(btn) {
+    if (!btn || !btn.dataset) return;
+    startNodeCableDrawing(Number(btn.dataset.nodeId));
+  }
+
+  function focusTiangFromBtn(btn) {
+    if (!btn || !btn.dataset) return;
+    const entry = nodeMap[btn.dataset.nodeId];
+    if (!entry) return alert('Tiang ini belum tergambar di peta.');
+    map.flyTo(entry.coord, 18, { duration: 1 });
+    setTimeout(function () { entry.marker.openPopup(); }, 900);
+  }
+
+  async function deleteTiangFromBtn(btn) {
+    if (!btn || !btn.dataset) return;
+    const id = Number(btn.dataset.nodeId);
+    const nama = btn.dataset.nodeName || 'tiang ini';
+    const anak = Number(btn.dataset.nodeChildren || 0);
+
+    let pesan = 'Hapus ' + nama + '?';
+    if (anak > 0) {
+      pesan += '\n\n' + anak + ' objek menginduk ke tiang ini. Objeknya TIDAK ikut terhapus, ' +
+        'tapi induknya jadi kosong sehingga jalurnya perlu di-set ulang.';
+    }
+    if (!confirm(pesan)) return;
+
+    try {
+      const res = await fetch('/admin/api/map/nodes/' + id + '/delete', {
+        method: 'POST',
+        headers: { 'Accept': 'application/json' }
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) throw new Error(data.error || res.status);
+      location.reload();
+    } catch (e) {
+      alert('Gagal menghapus: ' + e.message);
+    }
+  }
+
+  // Filter tabel tiang
+  (function bindTiangSearch() {
+    const input = document.getElementById('tiangSearch');
+    const tbody = document.getElementById('tiangTbody');
+    if (!input || !tbody) return;
+    input.addEventListener('input', function () {
+      const q = String(input.value || '').trim().toLowerCase();
+      Array.from(tbody.querySelectorAll('tr[data-name]')).forEach(function (r) {
+        const nama = String(r.getAttribute('data-name') || '');
+        const induk = String(r.getAttribute('data-parent') || '');
+        r.style.display = (!q || nama.includes(q) || induk.includes(q)) ? '' : 'none';
+      });
+    });
+  })();
+
   // Right Click on Map to Add ODP
   map.on('contextmenu', function(e) {
     const lat = e.latlng.lat.toFixed(6);
@@ -2182,7 +2349,7 @@
       '<div><strong>Koordinat:</strong> ' + coord[0].toFixed(6) + ', ' + coord[1].toFixed(6) + '</div>' +
       '<div class="popup-actions">' +
       '<button class="btn btn-sm btn-p" onclick="openNetNodeModal(null, null, null, ' + node.id + ')"><i class="bi bi-pencil me-1"></i>Edit</button>' +
-      (node.parent_id ? '<button class="btn btn-sm btn-g" onclick="startNodeCableDrawing(' + node.id + ')"><i class="bi bi-bezier2 me-1"></i>Gambar Jalur</button>' : '') +
+      (node.parent_id ? '<button class="btn btn-sm btn-jalur" onclick="startNodeCableDrawing(' + node.id + ')"><i class="bi bi-bezier2 me-1"></i>Gambar Jalur</button>' : '') +
       '</div></div>'
     );
 
