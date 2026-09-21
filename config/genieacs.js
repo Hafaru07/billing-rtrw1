@@ -3,6 +3,7 @@ require('dotenv').config();
 const { logger } = require('./logger');
 const db = require('./database');
 const { getSetting } = require('./settingsManager');
+const cron = require('node-cron');
 
 // ─── Built-in ACS Helpers ────────────────────────────────────────────────────
 
@@ -1122,42 +1123,43 @@ async function monitorOfflineDevices(thresholdHours = 24) {
 }
 
 // Jadwalkan monitoring setiap 6 jam
+/**
+ * Toggle "Monitoring Enabled" di halaman Monitoring Sistem.
+ * Dianggap menyala bila nilainya belum pernah diatur, sama seperti tampilan
+ * di halaman admin yang mencentang kotaknya selama nilainya bukan false.
+ */
+function monitoringAktif() {
+    const v = getSetting('genieacs_monitoring_enabled', true);
+    return !(v === false || v === 'false' || v === 0 || v === '0');
+}
+
 function scheduleMonitoring() {
-    // Jalankan sekali saat startup (delay lebih lama untuk stabilitas)
-    setTimeout(async () => {
-        logger.info('[Monitoring] Menjalankan pemantauan RXPower awal...');
+    // Sekali sehari jam 07:00 waktu server. Pemeriksaan saat startup dan
+    // interval 6/12 jam sengaja dihapus: alert redaman tinggi berulang kali
+    // sehari membanjiri admin, owner, dan teknisi.
+    cron.schedule('0 7 * * *', async () => {
+        if (!monitoringAktif()) {
+            logger.info('[Monitoring] Toggle monitoring mati, pemeriksaan harian dilewati.');
+            return;
+        }
+
+        logger.info('[Monitoring] Pemeriksaan harian RXPower...');
         try {
             await monitorRXPower();
         } catch (error) {
-            logger.error('[Monitoring] Error pada pemantauan RXPower awal:', error.message);
+            logger.error('[Monitoring] Error pada pemantauan RXPower:', error.message);
         }
-        
-        logger.info('[Monitoring] Menjalankan pemantauan perangkat offline awal...');
+
+        logger.info('[Monitoring] Pemeriksaan harian perangkat offline...');
         try {
             await monitorOfflineDevices();
         } catch (error) {
-            logger.error('[Monitoring] Error pada pemantauan offline awal:', error.message);
+            logger.error('[Monitoring] Error pada pemantauan offline:', error.message);
         }
-        
-        // Jadwalkan secara berkala dengan error handling
-        setInterval(async () => {
-            logger.info('[Monitoring] Menjalankan pemantauan RXPower terjadwal...');
-            try {
-                await monitorRXPower();
-            } catch (error) {
-                logger.error('[Monitoring] Error pada pemantauan RXPower:', error.message);
-            }
-        }, 6 * 60 * 60 * 1000); // Setiap 6 jam
-        
-        setInterval(async () => {
-            logger.info('[Monitoring] Menjalankan pemantauan perangkat offline terjadwal...');
-            try {
-                await monitorOfflineDevices();
-            } catch (error) {
-                logger.error('[Monitoring] Error pada pemantauan offline:', error.message);
-            }
-        }, 12 * 60 * 60 * 1000); // Setiap 12 jam
-    }, 10 * 60 * 1000); // Mulai 10 menit setelah server berjalan (lebih stabil)
+    });
+
+    logger.info('[Monitoring] Pemeriksaan dijadwalkan sekali sehari jam 07:00' +
+        (monitoringAktif() ? '.' : ' (saat ini toggle monitoring MATI).'));
 }
 
 // Jalankan penjadwalan monitoring

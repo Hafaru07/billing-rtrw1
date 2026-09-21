@@ -1038,6 +1038,14 @@ function loadWhatsappAdminSendList() {
  * @param {string} priority - Priority level: 'high', 'medium', 'low'
  */
 export async function sendMonitoringAlert(message, priority = 'medium') {
+  // Pengaman kedua: kalau toggle monitoring dimatikan, alert tidak dikirim
+  // lewat jalur mana pun, bukan hanya lewat penjadwal.
+  const monitoringOn = getSetting('genieacs_monitoring_enabled', true);
+  if (monitoringOn === false || monitoringOn === 'false' || monitoringOn === 0 || monitoringOn === '0') {
+    logger.info('[WhatsApp] Monitoring dimatikan, alert tidak dikirim.');
+    return { success: false, message: 'Monitoring dimatikan' };
+  }
+
   const gatewayType = getSetting('wa_gateway_type', 'baileys');
   if (gatewayType === 'baileys' && (!currentSock || whatsappStatus._connection !== 'open')) {
     logger.warn('[WhatsApp] Bot belum siap (koneksi belum terbuka), tidak dapat mengirim alert monitoring');
@@ -1088,8 +1096,20 @@ export async function sendMonitoringAlert(message, priority = 'medium') {
 
     logger.info(`[WhatsApp] Mengirim alert monitoring ke ${recipients.length} penerima (${adminJids.length} admin, ${techJids.length} teknisi)`);
 
+    // Jeda acak antar penerima supaya kiriman ke banyak staf tidak terbaca
+    // sebagai blast. Penerima pertama tetap langsung dikirimi.
+    let jedaMin = Number(getSetting('whatsapp_alert_delay_min', 8) || 8);
+    let jedaMax = Number(getSetting('whatsapp_alert_delay_max', 20) || 20);
+    if (!Number.isFinite(jedaMin) || jedaMin < 1) jedaMin = 8;
+    if (!Number.isFinite(jedaMax) || jedaMax < jedaMin) jedaMax = Math.max(jedaMin, 20);
+
     const results = [];
-    for (const jid of recipients) {
+    for (let i = 0; i < recipients.length; i++) {
+      const jid = recipients[i];
+      if (i > 0) {
+        const jeda = (Math.floor(Math.random() * (jedaMax - jedaMin + 1)) + jedaMin) * 1000;
+        await new Promise(r => setTimeout(r, jeda));
+      }
       try {
         if (gatewayType === 'fonnte' || gatewayType === 'meta') {
           const ok = await sendWA(jid, formattedMessage);
