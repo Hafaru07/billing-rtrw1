@@ -979,6 +979,11 @@ function leafBisaDitulis(doc, jalur) {
   return !!node && node._writable !== false;
 }
 
+function nilaiLeafWifi(doc, jalur) {
+  const node = ambilNodeWifi(doc, jalur);
+  return node && node._value !== undefined && node._value !== null ? String(node._value) : '';
+}
+
 function deteksiVendorWifi(doc) {
   const d = (doc && doc._deviceId) || {};
   const kunciWlan1 = Object.keys(ambilNodeWifi(doc, WLAN_ROOT + '.1') || {});
@@ -1002,6 +1007,7 @@ function targetWifi(doc) {
     if (!ambilNodeWifi(doc, base)) continue;
     target.push({
       pita,
+      nilaiSsid: nilaiLeafWifi(doc, base + '.SSID'),
       ssid: leafBisaDitulis(doc, base + '.SSID') ? base + '.SSID' : null,
       password: urutan.map(leaf => base + '.' + leaf).filter(p => leafBisaDitulis(doc, p))
     });
@@ -1014,6 +1020,7 @@ function targetWifi(doc) {
       const jalurSsid = 'Device.WiFi.SSID.' + idx + '.SSID';
       target.push({
         pita,
+        nilaiSsid: nilaiLeafWifi(doc, jalurSsid),
         ssid: leafBisaDitulis(doc, jalurSsid) ? jalurSsid : null,
         password: ['KeyPassphrase', 'PreSharedKey']
           .map(leaf => 'Device.WiFi.AccessPoint.' + idx + '.Security.' + leaf)
@@ -1084,12 +1091,12 @@ async function kirimSetParameter(instance, deviceId, parameterValues) {
   }
 
   const status = Number(res && res.status);
-  if (status === 200) return { hasil: 'applied' };
+  const taskId = res && res.data && res.data._id ? String(res.data._id) : '';
+  if (status === 200) return { hasil: 'applied', taskId };
   if (status !== 202) return { hasil: 'error', pesan: 'HTTP ' + status };
 
   // 202 bisa berarti ONU belum merespons, atau ONU menolak perintah (fault).
-  const taskId = res.data && res.data._id ? String(res.data._id) : '';
-  if (!taskId) return { hasil: 'queued' };
+  if (!taskId) return { hasil: 'queued', taskId };
   try {
     const f = await instance.get('/faults/', {
       params: { query: JSON.stringify({ device: deviceId }) },
@@ -1108,7 +1115,7 @@ async function kirimSetParameter(instance, deviceId, parameterValues) {
   } catch (e) {
     // Fault tidak terbaca: anggap masih antre.
   }
-  return { hasil: 'queued' };
+  return { hasil: 'queued', taskId };
 }
 
 function validateWifiSsid(ssid) {
@@ -1214,7 +1221,20 @@ async function ubahWifi(tag, jenis, nilai, actor) {
           : (r.hasil === 'applied'
             ? 'Password WiFi berhasil diubah dan sudah diterapkan di modem. Sambungkan ulang perangkat Anda memakai password baru.'
             : 'Perintah sudah dikirim, tetapi modem belum merespons ACS. Password akan berubah otomatis begitu modem tersambung.');
-        return { ok: true, status: r.hasil, vendor, paths: jalur, message: pesan };
+        const utama24 = target.find(t => t.pita === '2.4G');
+        const utama5 = target.find(t => t.pita === '5G');
+        return {
+          ok: true,
+          status: r.hasil,
+          vendor,
+          paths: jalur,
+          message: pesan,
+          // Nama WiFi saat ini, dipakai notifikasi WhatsApp ganti password.
+          ssid: jenis === 'ssid' ? nilai : ((utama24 && utama24.nilaiSsid) || ''),
+          ssid5g: jenis === 'ssid' ? '' : ((utama5 && utama5.nilaiSsid) || ''),
+          // Untuk memeriksa belakangan apakah perintah yang antre sudah dijalankan.
+          acs: { serverId: server.id, deviceId, taskId: r.taskId || '' }
+        };
       }
 
       logger.warn('[WiFi] ' + jenis + ' ditolak ' + deviceId + ' (' + vendor + ') lewat ' + jalur.join(', ') +
@@ -1326,22 +1346,142 @@ async function requestRefresh(tag, actor = null) {
   }
 }
 
+// ─── Restart modem ───────────────────────────────────────────────────────────
+// Reboot adalah RPC wajib TR-069, jadi Huawei, FiberHome, Nokia, dan ZTE-CMCC
+// memakai task yang sama tanpa parameter vendor. Yang menentukan berhasil
+// tidaknya adalah cara pengirimannya:
+//  - connection_request supaya dijalankan sekarang, bukan menunggu inform;
+//  - tidak menumpuk task reboot untuk modem yang sama;
+//  - task reboot yang tertinggal setelah modem terbukti restart dihapus.
+//    GenieACS mengulang task yang tidak diakui modem, dan modem bisa terjebak
+//    restart berulang (dilaporkan di forum GenieACS, paling sering di Huawei).
+const rebootSedangDiproses = new Map(); // deviceId -> waktu mulai (ms)
+const PENJAGA_REBOOT_MS = 10 * 60 * 1000;
+
+function waktuMs(x) {
+  const t = new Date(x).getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+
+async function hapusTaskDanFault(instance, deviceId, taskId) {
+  await instance.delete('/tasks/' + encodeURIComponent(taskId), { timeout: 10000, validateStatus: () => true });
+  await instance.delete('/faults/' + encodeURIComponent(deviceId + ':task_' + taskId), { timeout: 10000, validateStatus: () => true });
+}
+
+// Hapus task reboot yang basi (modem tercatat boot SETELAH task dibuat, artinya
+// perintahnya sudah jalan tetapi task-nya tertinggal) atau yang ditolak modem.
+// Mengembalikan task reboot yang memang masih menunggu.
+async function bersihkanRebootBasi(instance, deviceId) {
+  const q = { params: { query: JSON.stringify({ device: deviceId }) }, timeout: 15000, validateStatus: () => true };
+  const tasks = await instance.get('/tasks/', q);
+  const daftar = (Array.isArray(tasks && tasks.data) ? tasks.data : []).filter(t => t && t.name === 'reboot');
+  if (!daftar.length) return [];
+
+  const faults = await instance.get('/faults/', q);
+  const daftarFault = Array.isArray(faults && faults.data) ? faults.data : [];
+  const dev = await instance.get('/devices/', {
+    params: { query: JSON.stringify({ _id: deviceId }), projection: '_id,_lastBoot' },
+    timeout: 15000,
+    validateStatus: () => true
+  });
+  const doc = (Array.isArray(dev && dev.data) ? dev.data : []).find(x => x && x._id === deviceId);
+  const boot = doc ? waktuMs(doc._lastBoot) : 0;
+
+  const masihMenunggu = [];
+  for (const t of daftar) {
+    const dibuat = waktuMs(t.timestamp);
+    const basi = boot && dibuat && boot > dibuat;
+    const ditolak = daftarFault.some(f => String(f._id || '') === deviceId + ':task_' + t._id);
+    if (basi || ditolak) {
+      await hapusTaskDanFault(instance, deviceId, t._id);
+      logger.info('[Reboot] Task reboot ' + (basi ? 'basi' : 'yang ditolak') + ' dihapus dari ' + deviceId);
+    } else {
+      masihMenunggu.push(t);
+    }
+  }
+  return masihMenunggu;
+}
+
 async function requestReboot(tag, actor = null) {
   const device = await resolveDeviceToken(tag);
-  if (!device || !device._id) return { ok: false, message: 'Perangkat tidak ditemukan.' };
-  
-  const server = device._acs_server_id ? genieacsApi.getACSServer(device._acs_server_id) : genieacsApi.getACSServer('legacy');
-  if (!server) return { ok: false, message: 'Server ACS tidak ditemukan.' };
-  
-  const instance = genieacsApi.createAxiosInstance(server);
-  
-  try {
-    await instance.post(
-      `/devices/${encodeURIComponent(device._id)}/tasks`,
-      { name: 'reboot', timestamp: new Date().toISOString() }
-    );
+  if (!device || !device._id) return { ok: false, status: 'notfound', message: 'Perangkat tidak ditemukan di ACS.' };
 
-    // Catat audit trail jika berhasil
+  const deviceId = device._id;
+  const mulai = rebootSedangDiproses.get(deviceId);
+  if (mulai && Date.now() - mulai < BATAS_KUNCI_WIFI_MS) {
+    return { ok: false, status: 'busy', message: 'Perintah restart sebelumnya masih diproses. Mohon tunggu.' };
+  }
+  rebootSedangDiproses.set(deviceId, Date.now());
+
+  try {
+    const server = device._acs_server_id
+      ? genieacsApi.getACSServer(device._acs_server_id)
+      : genieacsApi.getACSServer('legacy');
+    if (!server) return { ok: false, status: 'failed', message: 'Server ACS tidak ditemukan.' };
+    const instance = genieacsApi.createAxiosInstance(server);
+    const vendor = deteksiVendorWifi(device);
+
+    let menunggu = [];
+    try {
+      menunggu = await bersihkanRebootBasi(instance, deviceId);
+    } catch (e) {
+      logger.debug('[Reboot] Pemeriksaan task lama dilewati: ' + e.message);
+    }
+    if (menunggu.length) {
+      return {
+        ok: true,
+        status: 'queued',
+        message: 'Perintah restart sebelumnya masih menunggu modem terhubung ke ACS. Modem akan restart otomatis begitu tersambung.'
+      };
+    }
+
+    let res;
+    try {
+      res = await instance.post('/devices/' + encodeURIComponent(deviceId) + '/tasks', { name: 'reboot' }, {
+        // Lewat params, bukan ditempel di URL: proxy ACS bawaan mencocokkan URL persis.
+        params: { timeout: 15000, connection_request: '' },
+        timeout: 30000,
+        validateStatus: () => true
+      });
+    } catch (e) {
+      return { ok: false, status: 'failed', message: 'Gagal menghubungi ACS. Silakan coba lagi.' };
+    }
+
+    const kode = Number(res && res.status);
+    const taskId = res && res.data && res.data._id ? String(res.data._id) : '';
+    let hasil;
+    if (kode === 200) {
+      hasil = 'applied';
+    } else if (kode === 202) {
+      hasil = 'queued';
+      if (taskId) {
+        try {
+          const f = await instance.get('/faults/', {
+            params: { query: JSON.stringify({ device: deviceId }) },
+            timeout: 15000,
+            validateStatus: () => true
+          });
+          const fault = (Array.isArray(f && f.data) ? f.data : [])
+            .find(x => String(x._id || '') === deviceId + ':task_' + taskId);
+          if (fault) {
+            await hapusTaskDanFault(instance, deviceId, taskId);
+            logger.warn('[Reboot] Ditolak ' + deviceId + ' (' + vendor + '): ' + fault.code + ' ' + (fault.message || ''));
+            return { ok: false, status: 'failed', message: 'Modem menolak perintah restart (kode ' + fault.code + '). Silakan hubungi admin.' };
+          }
+        } catch (e) { /* fault tidak terbaca: anggap masih antre */ }
+
+        // Penjaga anti restart berulang: setelah modem sempat restart,
+        // pastikan task reboot-nya tidak tertinggal di antrean.
+        const penjaga = setTimeout(() => {
+          bersihkanRebootBasi(instance, deviceId).catch(() => {});
+        }, PENJAGA_REBOOT_MS);
+        if (penjaga.unref) penjaga.unref();
+      }
+    } else {
+      return { ok: false, status: 'failed', message: 'ACS menolak perintah restart (HTTP ' + kode + ').' };
+    }
+
+    logger.info('[Reboot] ' + hasil + ' di ' + deviceId + ' (' + vendor + ')');
     if (actor) {
       auditTrail.logAuditTrail({
         action: 'REBOOT_DEVICE',
@@ -1350,18 +1490,43 @@ async function requestReboot(tag, actor = null) {
         actor_type: actor.type || 'unknown',
         actor_id: actor.id || null,
         actor_name: actor.name || null,
-        details: {
-          device_id: device._id
-        },
+        details: { device_id: deviceId, status: hasil, vendor },
         ip_address: actor.ip || null,
         user_agent: actor.userAgent || null
       });
     }
 
-    return { ok: true, message: 'Perintah reboot terkirim. Tunggu beberapa menit hingga ONU online.' };
-  } catch (e) {
-    return { ok: false, message: 'Gagal mengirim reboot ke GenieACS.' };
+    return {
+      ok: true,
+      status: hasil,
+      message: hasil === 'applied'
+        ? 'Modem menerima perintah restart dan sedang menyala ulang. Internet akan kembali dalam 1-2 menit.'
+        : 'Perintah restart sudah dikirim, tetapi modem belum merespons ACS. Modem akan restart otomatis begitu tersambung (biasanya kurang dari 5 menit).'
+    };
+  } finally {
+    rebootSedangDiproses.delete(deviceId);
   }
+}
+
+// Status task yang sudah dikirim ke ACS: 'done' (sudah dijalankan modem),
+// 'pending' (masih antre), 'fault' (ditolak modem), atau 'unknown'.
+async function statusTaskAcs(acs) {
+  if (!acs || !acs.deviceId || !acs.taskId) return 'unknown';
+  // ACS bawaan tidak menyediakan /tasks & /faults lewat API ini.
+  if (acs.serverId === 'builtin') return 'unknown';
+  const server = genieacsApi.getACSServer(acs.serverId || 'legacy');
+  if (!server) return 'unknown';
+  const instance = genieacsApi.createAxiosInstance(server);
+  const q = { params: { query: JSON.stringify({ device: acs.deviceId }) }, timeout: 15000, validateStatus: () => true };
+
+  const faults = await instance.get('/faults/', q);
+  const ditolak = (Array.isArray(faults && faults.data) ? faults.data : [])
+    .some(f => String(f._id || '') === acs.deviceId + ':task_' + acs.taskId);
+  if (ditolak) return 'fault';
+
+  const tasks = await instance.get('/tasks/', q);
+  if (!Array.isArray(tasks && tasks.data)) return 'unknown';
+  return tasks.data.some(t => String(t._id) === String(acs.taskId)) ? 'pending' : 'done';
 }
 
 /** Daftar perangkat yang punya minimal satu tag (untuk admin WA). */
@@ -1526,6 +1691,7 @@ module.exports = {
   changeWifiPassword,
   validateWifiSsid,
   validateWifiPassword,
+  statusTaskAcs,
   requestReboot,
   updateCustomerTag,
   listDevicesWithTags,

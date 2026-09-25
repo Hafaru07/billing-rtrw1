@@ -1378,17 +1378,18 @@
           <h5 class="modal-title fw-bold text-white fs-5"><i class="bi bi-arrow-clockwise me-2 text-warning fs-4"></i>Reboot Router / Modem</h5>
           <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
-        <form action="/customer/reboot" method="POST">
+        <form action="/customer/reboot" method="POST" id="formReboot">
           <div class="modal-body p-4 text-center">
             <div class="p-3 mb-3 rounded-circle bg-warning bg-opacity-10 text-warning d-inline-flex">
               <i class="bi bi-exclamation-triangle-fill fs-1"></i>
             </div>
             <h6 class="fw-bold text-white mb-2">Apakah Anda yakin ingin menyalakan ulang modem?</h6>
             <p class="small mb-0" style="color:#e2e8f0; font-weight:600;">Proses reboot membutuhkan waktu sekitar 1-2 menit. Selama booting berlangsung, koneksi internet WiFi Anda akan terputus sementara.</p>
+            <div id="rebootStatus" class="small fw-bold mt-3" style="display:none;" role="status" aria-live="polite"></div>
           </div>
           <div class="modal-footer border-0 pt-0 pb-4 px-4 d-flex gap-2">
             <button type="button" class="btn btn-outline-secondary px-4 text-white" data-bs-dismiss="modal" style="border-radius:12px;">Batal</button>
-            <button type="submit" class="btn btn-warning text-dark fw-bold px-4 flex-grow-1" style="border-radius:12px;">Ya, Reboot Sekarang</button>
+            <button type="submit" id="btnReboot" class="btn btn-warning text-dark fw-bold px-4 flex-grow-1" style="border-radius:12px;">Ya, Reboot Sekarang</button>
           </div>
         </form>
       </div>
@@ -1481,8 +1482,14 @@
 
     // ── Ganti nama WiFi / password: satu permintaan per tekan ────────────────
     // Tombol dikunci sampai ACS menjawab, lalu dikunci lagi selama jeda dari
-    // server, karena setiap perubahan mengirim notifikasi WhatsApp ke pelanggan.
-    const wifiSibuk = { ssid: false, password: false };
+    // server (5 menit) supaya modem tidak diubah atau direstart berulang kali.
+    const wifiSibuk = { ssid: false, password: false, reboot: false };
+
+    function formatSisa(detik) {
+      if (detik < 60) return detik + ' dtk';
+      const s = detik % 60;
+      return Math.floor(detik / 60) + ':' + (s < 10 ? '0' : '') + s;
+    }
 
     function tampilStatusWifi(el, jenis, teks) {
       const gaya = {
@@ -1503,7 +1510,7 @@
     function kunciTombolWifi(jenis, tombol, labelAsli, detik) {
       let sisa = detik;
       tombol.disabled = true;
-      tombol.textContent = 'Tunggu ' + sisa + ' dtk';
+      tombol.textContent = 'Tunggu ' + formatSisa(sisa);
       const timer = setInterval(function () {
         sisa--;
         if (sisa <= 0) {
@@ -1512,7 +1519,7 @@
           tombol.textContent = labelAsli;
           wifiSibuk[jenis] = false;
         } else {
-          tombol.textContent = 'Tunggu ' + sisa + ' dtk';
+          tombol.textContent = 'Tunggu ' + formatSisa(sisa);
         }
       }, 1000);
     }
@@ -1528,7 +1535,7 @@
       tombol.disabled = true;
       tombol.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status"></span>Menunggu ACS...';
       const input = form.querySelector('input');
-      input.readOnly = true;
+      if (input) input.readOnly = true;
       tampilStatusWifi(statusEl, 'proses', 'Perintah terkirim. Menunggu modem merespons ACS (biasanya 5-30 detik). Jangan tutup halaman ini.');
 
       let data = null;
@@ -1549,7 +1556,7 @@
         data = { ok: false, message: 'Koneksi ke server terputus. Periksa internet Anda lalu coba lagi.' };
       }
 
-      input.readOnly = false;
+      if (input) input.readOnly = false;
       if (data.ok && data.status === 'applied') {
         tampilStatusWifi(statusEl, 'sukses', data.message);
         if (jenis === 'ssid' && data.ssid) {
@@ -1561,7 +1568,7 @@
       } else {
         tampilStatusWifi(statusEl, 'gagal', data.message || 'Gagal memproses permintaan.');
       }
-      if (jenis === 'password' && data.ok) input.value = '';
+      if (jenis === 'password' && data.ok && input) input.value = '';
 
       const jeda = Number(data.retryAfter) || 0;
       if (jeda > 0) {
@@ -1580,6 +1587,10 @@
     document.getElementById('formGantiPassword').addEventListener('submit', function (e) {
       e.preventDefault();
       kirimGantiWifi('password', this, document.getElementById('btnSimpanPassword'), document.getElementById('passStatus'));
+    });
+    document.getElementById('formReboot').addEventListener('submit', function (e) {
+      e.preventDefault();
+      kirimGantiWifi('reboot', this, document.getElementById('btnReboot'), document.getElementById('rebootStatus'));
     });
 
     function editSsid(deviceId, currentSsid) {
@@ -1601,6 +1612,7 @@
     }
 
     function rebootDevice(deviceId) {
+      if (!wifiSibuk.reboot) document.getElementById('rebootStatus').style.display = 'none';
       const m = new bootstrap.Modal(document.getElementById('rebootModal'));
       m.show();
     }

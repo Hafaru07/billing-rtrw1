@@ -117,7 +117,10 @@ function findCustomerProfileByLoginId(loginId) {
   return customerSvc.getAllCustomers().find((c) => {
     const cleanDb = String(c.phone || '').replace(/\D/g, '');
     return (
-      cleanDb === cleanLogin ||
+      // Nomor hanya dicocokkan bila ID login memang berisi angka. Tanpa syarat
+      // ini, ID seperti "Hwtc_Test" menjadi '' dan cocok dengan pelanggan lain
+      // yang nomor HP-nya kosong.
+      (cleanLogin !== '' && cleanDb === cleanLogin) ||
       c.phone === loginId ||
       c.genieacs_tag === loginId ||
       c.pppoe_username === loginId
@@ -2072,94 +2075,176 @@ router.get('/api/pppoe-traffic', async (req, res) => {
   }
 });
 
-// ─── Ganti SSID / password dari portal pelanggan ─────────────────────────────
-// Hanya satu permintaan yang diproses per pelanggan: klik berulang ditolak
-// selama permintaan sebelumnya masih menunggu ACS, lalu ada jeda sebelum bisa
-// mengubah lagi. WhatsApp hanya dikirim bila modem sudah benar-benar menerapkan
-// perubahan, dan pesan yang sama tidak dikirim dua kali dalam waktu dekat.
-const JEDA_GANTI_WIFI_MS = 60 * 1000;
+// ─── Aksi modem dari portal pelanggan: ganti WiFi & restart ──────────────────
+// Satu permintaan per pelanggan per jenis aksi: klik berulang ditolak selama
+// permintaan sebelumnya masih menunggu ACS, lalu ada jeda 5 menit sebelum bisa
+// diulang. WhatsApp hanya dikirim untuk ganti password (lengkap dengan nama
+// WiFi saat ini), dan hanya setelah modem benar-benar menerapkannya.
+const JEDA_AKSI_MODEM_MS = 5 * 60 * 1000;
 const JEDA_WA_WIFI_SAMA_MS = 10 * 60 * 1000;
-const gantiWifiSedangJalan = new Set(); // `${loginId}:${jenis}`
-const gantiWifiTerakhir = new Map();    // `${loginId}:${jenis}` -> waktu (ms)
-const waWifiTerakhir = new Map();       // hash(nomor|jenis|nilai) -> waktu (ms)
+const aksiModemSedangJalan = new Set(); // `${loginId}:${jenis}`
+const aksiModemTerakhir = new Map();    // `${loginId}:${jenis}` -> waktu (ms)
+const waWifiTerakhir = new Map();       // hash(nomor|ssid|password) -> waktu (ms)
 
 function mintaBalasanJson(req) {
   return String(req.get('accept') || '').includes('application/json') || req.get('x-requested-with') === 'fetch';
 }
 
-async function kirimWaPerubahanWifi(profile, jenis, nilai) {
+// Pengenal modem pelanggan. Username PPPoE dari sesi login dicoba lebih dulu:
+// paling pasti menunjuk modem pelanggan ini, dan banyak ONU tidak punya tag.
+function tokenPerangkatPelanggan(req, loginId, profile) {
+  const dariSesi = String((req.session && req.session.pppoe_username) || '').trim();
+  return Array.from(new Set([dariSesi, ...buildCustomerDeviceTokens(loginId, profile)].filter(Boolean)));
+}
+
+function balasAksiModem(req, res, kodeHttp, hasil) {
+  if (mintaBalasanJson(req)) return res.status(kodeHttp).json(hasil);
+  req.session._msg = {
+    type: hasil.ok ? (hasil.status === 'queued' ? 'warning' : 'success') : 'danger',
+    text: hasil.message
+  };
+  return res.redirect('/customer/dashboard');
+}
+
+// Mengembalikan penolakan bila aksi yang sama masih berjalan atau masih dalam jeda.
+function tolakBilaSibuk(loginId, jenis) {
+  const kunci = loginId + ':' + jenis;
+  if (aksiModemSedangJalan.has(kunci)) {
+    return { kodeHttp: 429, hasil: { ok: false, status: 'busy', message: 'Permintaan sebelumnya masih menunggu respons ACS. Mohon tunggu.' } };
+  }
+  const sisaMs = JEDA_AKSI_MODEM_MS - (Date.now() - (aksiModemTerakhir.get(kunci) || 0));
+  if (sisaMs > 0) {
+    const detik = Math.ceil(sisaMs / 1000);
+    const teks = detik >= 60 ? Math.floor(detik / 60) + ' menit ' + (detik % 60) + ' detik' : detik + ' detik';
+    return {
+      kodeHttp: 429,
+      hasil: { ok: false, status: 'cooldown', retryAfter: detik, message: 'Permintaan sebelumnya baru saja diproses. Tunggu ' + teks + ' sebelum mencoba lagi.' }
+    };
+  }
+  return null;
+}
+
+function samarkanNomor(nomor) {
+  const d = String(nomor || '').replace(/\D/g, '');
+  return d.length > 4 ? '***' + d.slice(-4) : '***';
+}
+
+function waPelangganAktif(profile) {
+  return !!(getSettingsWithCache().whatsapp_enabled && profile && profile.phone);
+}
+
+// WhatsApp ganti password, lengkap dengan nama WiFi saat ini.
+// Setiap alasan tidak terkirim dicatat di log supaya mudah dilacak.
+async function kirimWaPasswordWifi(profile, info) {
+  const label = (profile && profile.name) || '-';
   try {
-    const settings = getSettingsWithCache();
-    if (!settings.whatsapp_enabled || !profile || !profile.phone) return;
+    if (!getSettingsWithCache().whatsapp_enabled) {
+      logger.warn('[WiFi] WA ganti password untuk ' + label + ' dilewati: WhatsApp dinonaktifkan di pengaturan.');
+      return false;
+    }
+    if (!profile || !profile.phone) {
+      logger.warn('[WiFi] WA ganti password untuk ' + label + ' dilewati: nomor HP pelanggan kosong.');
+      return false;
+    }
 
     // Disimpan sebagai hash supaya password tidak tertinggal di memori.
     const kunci = require('crypto').createHash('sha256')
-      .update(profile.phone + '|' + jenis + '|' + nilai).digest('hex');
-    if (Date.now() - (waWifiTerakhir.get(kunci) || 0) < JEDA_WA_WIFI_SAMA_MS) return;
+      .update(profile.phone + '|' + info.ssid + '|' + info.password).digest('hex');
+    if (Date.now() - (waWifiTerakhir.get(kunci) || 0) < JEDA_WA_WIFI_SAMA_MS) {
+      logger.info('[WiFi] WA ganti password untuk ' + label + ' dilewati: pesan yang sama baru saja dikirim.');
+      return false;
+    }
 
     const { sendWA, whatsappStatus } = await import('../services/whatsappBot.mjs');
-    if (!whatsappStatus || whatsappStatus.connection !== 'open') return;
+    const koneksi = whatsappStatus ? whatsappStatus.connection : 'tidak ada';
+    if (koneksi !== 'open') {
+      logger.warn('[WiFi] WA ganti password untuk ' + label + ' tidak terkirim: bot WhatsApp belum terhubung (status: ' +
+        koneksi + '). Hubungkan ulang bot di menu WhatsApp.');
+      return false;
+    }
 
-    const now = getNowLocal();
-    const msg = jenis === 'ssid'
-      ? `📶 *PERUBAHAN SSID WIFI*\n\n` +
-        `👤 *Pelanggan:* ${profile.name}\n` +
-        `🕒 *Waktu:* ${now}\n\n` +
-        `SSID WiFi Anda sudah diperbarui menjadi:\n` +
-        `📡 *${nilai}*\n\n` +
-        `Silakan pilih SSID baru di perangkat Anda untuk terhubung.\n` +
-        `⚠️ Jangan bagikan info ini ke orang lain.`
-      : `🔑 *PERUBAHAN PASSWORD WIFI*\n\n` +
-        `👤 *Pelanggan:* ${profile.name}\n` +
-        `🕒 *Waktu:* ${now}\n\n` +
-        `Password WiFi Anda sudah diperbarui menjadi:\n` +
-        `🔐 *${nilai}*\n\n` +
-        `Silakan gunakan password baru untuk terhubung.\n` +
-        `⚠️ Jangan bagikan password ini ke orang lain.`;
+    const baris = [
+      '🔑 *PERUBAHAN PASSWORD WIFI*',
+      '',
+      '👤 *Pelanggan:* ' + label,
+      '🕒 *Waktu:* ' + getNowLocal(),
+      '',
+      'Password WiFi Anda sudah diperbarui.',
+      '',
+      '📶 *Nama WiFi:* ' + (info.ssid || '-')
+    ];
+    if (info.ssid5g && info.ssid5g !== info.ssid) baris.push('📶 *Nama WiFi 5G:* ' + info.ssid5g);
+    baris.push(
+      '🔐 *Password:* ' + info.password,
+      '',
+      'Silakan sambungkan ulang perangkat Anda memakai password baru.',
+      '⚠️ Jangan bagikan password ini ke orang lain.'
+    );
 
-    waWifiTerakhir.set(kunci, Date.now());
-    await sendWA(profile.phone, msg);
-  } catch (e) { /* notifikasi WA tidak boleh menggagalkan perubahan WiFi */ }
+    // spintax dimatikan: tanda { } | di password atau nama WiFi tidak boleh diacak.
+    const terkirim = await sendWA(profile.phone, baris.join('\n'), { spintax: false });
+    if (terkirim) {
+      waWifiTerakhir.set(kunci, Date.now());
+      logger.info('[WiFi] WA ganti password terkirim ke ' + samarkanNomor(profile.phone) + ' (' + label + ').');
+      return true;
+    }
+    logger.warn('[WiFi] WA ganti password ke ' + samarkanNomor(profile.phone) + ' (' + label + ') gagal dikirim gateway.');
+    return false;
+  } catch (e) {
+    logger.error('[WiFi] WA ganti password untuk ' + label + ' error: ' + e.message);
+    return false;
+  }
+}
+
+// Password yang masih antre di ACS dicek ulang tiap menit (ONU melapor tiap
+// ~200 detik). WhatsApp baru dikirim setelah ACS memastikan modem sudah
+// menjalankannya, supaya pelanggan tidak menerima password yang belum aktif.
+function kirimWaSetelahDiterapkan(profile, info, acs) {
+  const label = (profile && profile.name) || '-';
+  const jedaDetik = Number(getSettingsWithCache().wifi_cek_antrean_detik) || 60;
+  const MAKS_CEK = 6;
+  let ke = 0;
+  const cek = async () => {
+    ke++;
+    let st = 'unknown';
+    try { st = await customerDevice.statusTaskAcs(acs); } catch (e) { st = 'unknown'; }
+    if (st === 'done') {
+      await kirimWaPasswordWifi(profile, info);
+      return;
+    }
+    if (st === 'fault') {
+      logger.warn('[WiFi] Password untuk ' + label + ' ditolak modem saat dijalankan; WA tidak dikirim.');
+      return;
+    }
+    if (ke < MAKS_CEK) {
+      const t = setTimeout(cek, jedaDetik * 1000);
+      if (t.unref) t.unref();
+    } else {
+      logger.warn('[WiFi] Password untuk ' + label + ' belum dijalankan modem setelah ' +
+        Math.round((MAKS_CEK * jedaDetik) / 60) + ' menit; WA tidak dikirim.');
+    }
+  };
+  const t = setTimeout(cek, jedaDetik * 1000);
+  if (t.unref) t.unref();
 }
 
 async function prosesGantiWifi(req, res, jenis) {
   const loginId = String(req.session?.phone ?? '').replace(/[\r\n\t]+/g, '').trim();
-  const json = mintaBalasanJson(req);
-  const balas = (kodeHttp, hasil) => {
-    if (json) return res.status(kodeHttp).json(hasil);
-    req.session._msg = {
-      type: hasil.ok ? (hasil.status === 'queued' ? 'warning' : 'success') : 'danger',
-      text: hasil.message
-    };
-    return res.redirect('/customer/dashboard');
-  };
-
   if (!loginId) {
-    return json
+    return mintaBalasanJson(req)
       ? res.status(401).json({ ok: false, status: 'unauthorized', message: 'Sesi Anda sudah berakhir. Silakan login ulang.' })
       : res.redirect('/customer/login');
   }
 
-  const kunci = loginId + ':' + jenis;
-  if (gantiWifiSedangJalan.has(kunci)) {
-    return balas(429, { ok: false, status: 'busy', message: 'Permintaan sebelumnya masih menunggu respons ACS. Mohon tunggu.' });
-  }
-  const sisaMs = JEDA_GANTI_WIFI_MS - (Date.now() - (gantiWifiTerakhir.get(kunci) || 0));
-  if (sisaMs > 0) {
-    const detik = Math.ceil(sisaMs / 1000);
-    return balas(429, {
-      ok: false,
-      status: 'cooldown',
-      retryAfter: detik,
-      message: 'Perubahan baru saja dikirim. Tunggu ' + detik + ' detik sebelum mengubah lagi.'
-    });
-  }
+  const tolak = tolakBilaSibuk(loginId, jenis);
+  if (tolak) return balasAksiModem(req, res, tolak.kodeHttp, tolak.hasil);
 
   const mentah = jenis === 'ssid' ? (req.body && req.body.ssid) : (req.body && req.body.password);
   const cek = jenis === 'ssid' ? customerDevice.validateWifiSsid(mentah) : customerDevice.validateWifiPassword(mentah);
-  if (cek.error) return balas(400, { ok: false, status: 'invalid', message: cek.error });
+  if (cek.error) return balasAksiModem(req, res, 400, { ok: false, status: 'invalid', message: cek.error });
 
-  gantiWifiSedangJalan.add(kunci);
+  const kunci = loginId + ':' + jenis;
+  aksiModemSedangJalan.add(kunci);
   try {
     const profile = findCustomerProfileByLoginId(loginId);
     const actor = {
@@ -2171,7 +2256,7 @@ async function prosesGantiWifi(req, res, jenis) {
     };
 
     let hasil = { ok: false, status: 'notfound', message: 'Perangkat Anda tidak ditemukan di ACS. Silakan hubungi admin.' };
-    for (const token of buildCustomerDeviceTokens(loginId, profile)) {
+    for (const token of tokenPerangkatPelanggan(req, loginId, profile)) {
       const r = jenis === 'ssid'
         ? await customerDevice.changeWifiSsid(token, cek.value, actor)
         : await customerDevice.changeWifiPassword(token, cek.value, actor);
@@ -2180,32 +2265,74 @@ async function prosesGantiWifi(req, res, jenis) {
       break;
     }
 
-    if (hasil.ok) gantiWifiTerakhir.set(kunci, Date.now());
-    if (hasil.status === 'applied') await kirimWaPerubahanWifi(profile, jenis, cek.value);
+    if (hasil.ok) aksiModemTerakhir.set(kunci, Date.now());
+
+    let pesan = hasil.message;
+    if (jenis === 'password' && hasil.ok) {
+      const info = { ssid: hasil.ssid || '', ssid5g: hasil.ssid5g || '', password: cek.value };
+      if (hasil.status === 'applied') {
+        if (await kirimWaPasswordWifi(profile, info)) pesan += ' Detail password juga sudah dikirim ke WhatsApp Anda.';
+      } else {
+        kirimWaSetelahDiterapkan(profile, info, hasil.acs);
+        if (waPelangganAktif(profile)) pesan += ' Detail password akan dikirim ke WhatsApp Anda setelah modem menerapkannya.';
+      }
+    }
 
     const kodeHttp = hasil.ok ? 200 : (hasil.status === 'busy' ? 429 : (hasil.status === 'notfound' ? 404 : 502));
-    const balasan = { ok: hasil.ok, status: hasil.status, message: hasil.message };
-    if (hasil.ok) balasan.retryAfter = Math.ceil(JEDA_GANTI_WIFI_MS / 1000);
+    const balasan = { ok: hasil.ok, status: hasil.status, message: pesan };
+    if (hasil.ok) balasan.retryAfter = Math.ceil(JEDA_AKSI_MODEM_MS / 1000);
     if (hasil.ok && jenis === 'ssid') balasan.ssid = cek.value;
-    return balas(kodeHttp, balasan);
+    return balasAksiModem(req, res, kodeHttp, balasan);
   } finally {
-    gantiWifiSedangJalan.delete(kunci);
+    aksiModemSedangJalan.delete(kunci);
   }
 }
 
 router.post('/change-ssid', (req, res) => prosesGantiWifi(req, res, 'ssid'));
 router.post('/change-password', (req, res) => prosesGantiWifi(req, res, 'password'));
 
+// Restart modem. Modem dicari dengan semua pengenal pelanggan (username PPPoE
+// dari sesi, nomor login, nomor HP, tag GenieACS) - banyak ONU tidak punya tag
+// dan hanya bisa ditemukan lewat username PPPoE.
 router.post('/reboot', async (req, res) => {
-  const phone = req.session && req.session.phone;
-  if (!phone) return res.redirect('/customer/login');
-  const r = await requestReboot(phone);
-  
-  req.session._msg = r.ok
-    ? { type: 'success', text: 'Perangkat berhasil direboot. Silakan tunggu beberapa menit.' }
-    : { type: 'danger', text: r.message || 'Gagal reboot.' };
+  const loginId = String(req.session?.phone ?? '').replace(/[\r\n\t]+/g, '').trim();
+  if (!loginId) {
+    return mintaBalasanJson(req)
+      ? res.status(401).json({ ok: false, status: 'unauthorized', message: 'Sesi Anda sudah berakhir. Silakan login ulang.' })
+      : res.redirect('/customer/login');
+  }
 
-  res.redirect('/customer/dashboard');
+  const tolak = tolakBilaSibuk(loginId, 'reboot');
+  if (tolak) return balasAksiModem(req, res, tolak.kodeHttp, tolak.hasil);
+
+  const kunci = loginId + ':reboot';
+  aksiModemSedangJalan.add(kunci);
+  try {
+    const profile = findCustomerProfileByLoginId(loginId);
+    const actor = {
+      type: 'customer',
+      id: (profile && profile.id) || null,
+      name: (profile && profile.name) || loginId,
+      ip: req.ip,
+      userAgent: req.get('user-agent') || null
+    };
+
+    let hasil = { ok: false, status: 'notfound', message: 'Perangkat Anda tidak ditemukan di ACS. Silakan hubungi admin.' };
+    for (const token of tokenPerangkatPelanggan(req, loginId, profile)) {
+      const r = await customerDevice.requestReboot(token, actor);
+      if (r.status === 'notfound') continue;
+      hasil = r;
+      break;
+    }
+
+    if (hasil.ok) aksiModemTerakhir.set(kunci, Date.now());
+    const kodeHttp = hasil.ok ? 200 : (hasil.status === 'busy' ? 429 : (hasil.status === 'notfound' ? 404 : 502));
+    const balasan = { ok: hasil.ok, status: hasil.status, message: hasil.message };
+    if (hasil.ok) balasan.retryAfter = Math.ceil(JEDA_AKSI_MODEM_MS / 1000);
+    return balasAksiModem(req, res, kodeHttp, balasan);
+  } finally {
+    aksiModemSedangJalan.delete(kunci);
+  }
 });
 
 router.post('/api/device/refresh', async (req, res) => {

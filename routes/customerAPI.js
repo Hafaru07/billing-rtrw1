@@ -2871,11 +2871,12 @@ router.post('/app/tech/tr069/device/reboot', requireTechApiAuth, async (req, res
     const { tag } = req.body;
     if (!tag) return res.status(400).json({ success: false, message: 'Tag / ID perangkat tidak valid' });
 
-    const ok = await customerDevice.requestReboot(tag);
-    if (ok) {
-      res.json({ success: true, message: 'Perintah Reboot berhasil dikirim ke Modem ONT melalui TR-069!' });
+    // requestReboot mengembalikan objek, jadi periksa .ok (objek selalu truthy).
+    const r = await customerDevice.requestReboot(tag);
+    if (r && r.ok) {
+      res.json({ success: true, message: r.message });
     } else {
-      res.status(400).json({ success: false, message: 'Gagal mengirim perintah reboot. Pastikan perangkat terhubung ke TR-069.' });
+      res.status(400).json({ success: false, message: (r && r.message) || 'Gagal mengirim perintah reboot. Pastikan perangkat terhubung ke TR-069.' });
     }
   } catch (e) {
     res.status(500).json({ success: false, message: 'Error reboot TR-069: ' + e.message });
