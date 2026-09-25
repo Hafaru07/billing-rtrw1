@@ -2072,95 +2072,129 @@ router.get('/api/pppoe-traffic', async (req, res) => {
   }
 });
 
-router.post('/change-ssid', async (req, res) => {
+// ─── Ganti SSID / password dari portal pelanggan ─────────────────────────────
+// Hanya satu permintaan yang diproses per pelanggan: klik berulang ditolak
+// selama permintaan sebelumnya masih menunggu ACS, lalu ada jeda sebelum bisa
+// mengubah lagi. WhatsApp hanya dikirim bila modem sudah benar-benar menerapkan
+// perubahan, dan pesan yang sama tidak dikirim dua kali dalam waktu dekat.
+const JEDA_GANTI_WIFI_MS = 60 * 1000;
+const JEDA_WA_WIFI_SAMA_MS = 10 * 60 * 1000;
+const gantiWifiSedangJalan = new Set(); // `${loginId}:${jenis}`
+const gantiWifiTerakhir = new Map();    // `${loginId}:${jenis}` -> waktu (ms)
+const waWifiTerakhir = new Map();       // hash(nomor|jenis|nilai) -> waktu (ms)
+
+function mintaBalasanJson(req) {
+  return String(req.get('accept') || '').includes('application/json') || req.get('x-requested-with') === 'fetch';
+}
+
+async function kirimWaPerubahanWifi(profile, jenis, nilai) {
+  try {
+    const settings = getSettingsWithCache();
+    if (!settings.whatsapp_enabled || !profile || !profile.phone) return;
+
+    // Disimpan sebagai hash supaya password tidak tertinggal di memori.
+    const kunci = require('crypto').createHash('sha256')
+      .update(profile.phone + '|' + jenis + '|' + nilai).digest('hex');
+    if (Date.now() - (waWifiTerakhir.get(kunci) || 0) < JEDA_WA_WIFI_SAMA_MS) return;
+
+    const { sendWA, whatsappStatus } = await import('../services/whatsappBot.mjs');
+    if (!whatsappStatus || whatsappStatus.connection !== 'open') return;
+
+    const now = getNowLocal();
+    const msg = jenis === 'ssid'
+      ? `📶 *PERUBAHAN SSID WIFI*\n\n` +
+        `👤 *Pelanggan:* ${profile.name}\n` +
+        `🕒 *Waktu:* ${now}\n\n` +
+        `SSID WiFi Anda sudah diperbarui menjadi:\n` +
+        `📡 *${nilai}*\n\n` +
+        `Silakan pilih SSID baru di perangkat Anda untuk terhubung.\n` +
+        `⚠️ Jangan bagikan info ini ke orang lain.`
+      : `🔑 *PERUBAHAN PASSWORD WIFI*\n\n` +
+        `👤 *Pelanggan:* ${profile.name}\n` +
+        `🕒 *Waktu:* ${now}\n\n` +
+        `Password WiFi Anda sudah diperbarui menjadi:\n` +
+        `🔐 *${nilai}*\n\n` +
+        `Silakan gunakan password baru untuk terhubung.\n` +
+        `⚠️ Jangan bagikan password ini ke orang lain.`;
+
+    waWifiTerakhir.set(kunci, Date.now());
+    await sendWA(profile.phone, msg);
+  } catch (e) { /* notifikasi WA tidak boleh menggagalkan perubahan WiFi */ }
+}
+
+async function prosesGantiWifi(req, res, jenis) {
   const loginId = String(req.session?.phone ?? '').replace(/[\r\n\t]+/g, '').trim();
-  if (!loginId) return res.redirect('/customer/login');
-  const { ssid } = req.body;
-  const profile = findCustomerProfileByLoginId(loginId);
-  const tokenCandidates = buildCustomerDeviceTokens(loginId, profile);
-  let ok = false;
-  for (const token of tokenCandidates) {
-    ok = await updateSSID(token, ssid);
-    if (ok) break;
-  }
-  
-  req.session._msg = ok 
-    ? { type: 'success', text: 'Nama WiFi (SSID) berhasil diubah.' }
-    : { type: 'danger', text: 'Gagal mengubah SSID.' };
-
-  // Kirim notifikasi WhatsApp ke pelanggan
-  if (ok) {
-    try {
-      const settings = getSettingsWithCache();
-      if (settings.whatsapp_enabled) {
-        if (profile && profile.phone) {
-          const { sendWA, whatsappStatus } = await import('../services/whatsappBot.mjs');
-          if (whatsappStatus && whatsappStatus.connection === 'open') {
-            const now = getNowLocal();
-            const msg = `\ud83d\udcf6 *PERUBAHAN SSID WIFI*\n\n` +
-              `\ud83d\udc64 *Pelanggan:* ${profile.name}\n` +
-              `\ud83d\udd52 *Waktu:* ${now}\n\n` +
-              `SSID WiFi Anda sudah diperbarui menjadi:\n` +
-              `\ud83d\udce1 *${ssid}*\n\n` +
-              `Silakan pilih SSID baru di perangkat Anda untuk terhubung.\n` +
-              `\u26a0\ufe0f Jangan bagikan info ini ke orang lain.`;
-            await sendWA(profile.phone, msg);
-          }
-        }
-      }
-    } catch (e) { /* ignore WA notification errors */ }
-  }
-
-  res.redirect('/customer/dashboard');
-});
-
-router.post('/change-password', async (req, res) => {
-  const loginId = String(req.session?.phone ?? '').replace(/[\r\n\t]+/g, '').trim();
-  if (!loginId) return res.redirect('/customer/login');
-  const passwordRaw = req.body ? req.body.password : '';
-  const password = String(passwordRaw ?? '').replace(/[\r\n\t]+/g, '').trim();
-  if (password.length < 8) {
-    req.session._msg = { type: 'danger', text: 'Gagal mengubah password. Pastikan minimal 8 karakter.' };
+  const json = mintaBalasanJson(req);
+  const balas = (kodeHttp, hasil) => {
+    if (json) return res.status(kodeHttp).json(hasil);
+    req.session._msg = {
+      type: hasil.ok ? (hasil.status === 'queued' ? 'warning' : 'success') : 'danger',
+      text: hasil.message
+    };
     return res.redirect('/customer/dashboard');
+  };
+
+  if (!loginId) {
+    return json
+      ? res.status(401).json({ ok: false, status: 'unauthorized', message: 'Sesi Anda sudah berakhir. Silakan login ulang.' })
+      : res.redirect('/customer/login');
   }
 
-  const profile = findCustomerProfileByLoginId(loginId);
-  const tokenCandidates = buildCustomerDeviceTokens(loginId, profile);
-  let ok = false;
-  for (const token of tokenCandidates) {
-    ok = await updatePassword(token, password);
-    if (ok) break;
+  const kunci = loginId + ':' + jenis;
+  if (gantiWifiSedangJalan.has(kunci)) {
+    return balas(429, { ok: false, status: 'busy', message: 'Permintaan sebelumnya masih menunggu respons ACS. Mohon tunggu.' });
   }
-  
-  req.session._msg = ok
-    ? { type: 'success', text: 'Password WiFi berhasil diubah.' }
-    : { type: 'danger', text: 'Gagal mengubah password. Perangkat mungkin offline atau sedang sibuk, silakan coba lagi.' };
-
-  // Kirim notifikasi WhatsApp ke pelanggan
-  if (ok) {
-    try {
-      const settings = getSettingsWithCache();
-      if (settings.whatsapp_enabled) {
-        if (profile && profile.phone) {
-          const { sendWA, whatsappStatus } = await import('../services/whatsappBot.mjs');
-          if (whatsappStatus && whatsappStatus.connection === 'open') {
-            const now = getNowLocal();
-            const msg = `\ud83d\udd11 *PERUBAHAN PASSWORD WIFI*\n\n` +
-              `\ud83d\udc64 *Pelanggan:* ${profile.name}\n` +
-              `\ud83d\udd52 *Waktu:* ${now}\n\n` +
-              `Password WiFi Anda sudah diperbarui menjadi:\n` +
-              `\ud83d\udd10 *${password}*\n\n` +
-              `Silakan gunakan password baru untuk terhubung.\n` +
-              `\u26a0\ufe0f Jangan bagikan password ini ke orang lain.`;
-            await sendWA(profile.phone, msg);
-          }
-        }
-      }
-    } catch (e) { /* ignore WA notification errors */ }
+  const sisaMs = JEDA_GANTI_WIFI_MS - (Date.now() - (gantiWifiTerakhir.get(kunci) || 0));
+  if (sisaMs > 0) {
+    const detik = Math.ceil(sisaMs / 1000);
+    return balas(429, {
+      ok: false,
+      status: 'cooldown',
+      retryAfter: detik,
+      message: 'Perubahan baru saja dikirim. Tunggu ' + detik + ' detik sebelum mengubah lagi.'
+    });
   }
 
-  res.redirect('/customer/dashboard');
-});
+  const mentah = jenis === 'ssid' ? (req.body && req.body.ssid) : (req.body && req.body.password);
+  const cek = jenis === 'ssid' ? customerDevice.validateWifiSsid(mentah) : customerDevice.validateWifiPassword(mentah);
+  if (cek.error) return balas(400, { ok: false, status: 'invalid', message: cek.error });
+
+  gantiWifiSedangJalan.add(kunci);
+  try {
+    const profile = findCustomerProfileByLoginId(loginId);
+    const actor = {
+      type: 'customer',
+      id: (profile && profile.id) || null,
+      name: (profile && profile.name) || loginId,
+      ip: req.ip,
+      userAgent: req.get('user-agent') || null
+    };
+
+    let hasil = { ok: false, status: 'notfound', message: 'Perangkat Anda tidak ditemukan di ACS. Silakan hubungi admin.' };
+    for (const token of buildCustomerDeviceTokens(loginId, profile)) {
+      const r = jenis === 'ssid'
+        ? await customerDevice.changeWifiSsid(token, cek.value, actor)
+        : await customerDevice.changeWifiPassword(token, cek.value, actor);
+      if (r.status === 'notfound') continue;
+      hasil = r;
+      break;
+    }
+
+    if (hasil.ok) gantiWifiTerakhir.set(kunci, Date.now());
+    if (hasil.status === 'applied') await kirimWaPerubahanWifi(profile, jenis, cek.value);
+
+    const kodeHttp = hasil.ok ? 200 : (hasil.status === 'busy' ? 429 : (hasil.status === 'notfound' ? 404 : 502));
+    const balasan = { ok: hasil.ok, status: hasil.status, message: hasil.message };
+    if (hasil.ok) balasan.retryAfter = Math.ceil(JEDA_GANTI_WIFI_MS / 1000);
+    if (hasil.ok && jenis === 'ssid') balasan.ssid = cek.value;
+    return balas(kodeHttp, balasan);
+  } finally {
+    gantiWifiSedangJalan.delete(kunci);
+  }
+}
+
+router.post('/change-ssid', (req, res) => prosesGantiWifi(req, res, 'ssid'));
+router.post('/change-password', (req, res) => prosesGantiWifi(req, res, 'password'));
 
 router.post('/reboot', async (req, res) => {
   const phone = req.session && req.session.phone;

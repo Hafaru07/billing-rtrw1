@@ -974,7 +974,7 @@
                 <span class="small fw-bold" style="color:#93c5fd;"><i class="bi bi-wifi text-info me-1"></i> Nama SSID WiFi</span>
                 <button class="btn btn-link btn-sm text-info p-0 text-decoration-none fw-bold" onclick="editSsid('<%= (customer.tags && customer.tags[0]) || customer.id %>', '<%= customer.ssid %>')">Ubah <i class="bi bi-pencil"></i></button>
               </div>
-              <div class="fw-bold text-white mb-3" style="font-size:16px;"><%= customer.ssid || '-' %></div>
+              <div id="ssidDisplay" class="fw-bold text-white mb-3" style="font-size:16px;"><%= customer.ssid || '-' %></div>
 
               <div class="d-flex align-items-center justify-content-between mb-1">
                 <span class="small fw-bold" style="color:#86efac;"><i class="bi bi-shield-lock text-success me-1"></i> Password WiFi</span>
@@ -1326,17 +1326,18 @@
           <h5 class="modal-title fw-bold text-white fs-5"><i class="bi bi-wifi me-2 text-info fs-4"></i>Ubah Nama WiFi (SSID)</h5>
           <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
-        <form action="/customer/change-ssid" method="POST">
+        <form action="/customer/change-ssid" method="POST" id="formGantiSsid">
           <div class="modal-body p-4">
             <div class="mb-3">
               <label class="form-label fw-bold" style="color:#f8fafc; font-size:13px;">Nama WiFi (SSID) Baru</label>
-              <input type="text" name="ssid" id="modalSsidInput" class="form-control text-white p-3" style="background:rgba(30,41,59,0.95); border:1px solid rgba(6,182,212,0.4); border-radius:14px; font-weight:600; color:#ffffff;" placeholder="Contoh: WiFi_Rumah_Keluarga" required>
+              <input type="text" name="ssid" id="modalSsidInput" maxlength="32" class="form-control text-white p-3" style="background:rgba(30,41,59,0.95); border:1px solid rgba(6,182,212,0.4); border-radius:14px; font-weight:600; color:#ffffff;" placeholder="Contoh: WiFi_Rumah_Keluarga" required>
               <div class="form-text small" style="color:#e2e8f0; font-weight:600;">Format nama WiFi bebas. Perangkat akan terputus sesaat setelah nama WiFi diubah.</div>
+              <div id="ssidStatus" class="small fw-bold mt-3" style="display:none;" role="status" aria-live="polite"></div>
             </div>
           </div>
           <div class="modal-footer border-0 pt-0 pb-4 px-4 d-flex gap-2">
             <button type="button" class="btn btn-outline-secondary px-4 text-white" data-bs-dismiss="modal" style="border-radius:12px;">Batal</button>
-            <button type="submit" class="btn btn-info text-dark fw-bold px-4 flex-grow-1" style="border-radius:12px;">Simpan Nama WiFi</button>
+            <button type="submit" id="btnSimpanSsid" class="btn btn-info text-dark fw-bold px-4 flex-grow-1" style="border-radius:12px;">Simpan Nama WiFi</button>
           </div>
         </form>
       </div>
@@ -1351,17 +1352,18 @@
           <h5 class="modal-title fw-bold text-white fs-5"><i class="bi bi-shield-lock me-2 text-success fs-4"></i>Ubah Password WiFi</h5>
           <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
-        <form action="/customer/change-password" method="POST">
+        <form action="/customer/change-password" method="POST" id="formGantiPassword">
           <div class="modal-body p-4">
             <div class="mb-3">
               <label class="form-label fw-bold" style="color:#f8fafc; font-size:13px;">Password WiFi Baru (Minimal 8 Karakter)</label>
-              <input type="password" name="password" id="modalPassInput" class="form-control text-white p-3" minlength="8" style="background:rgba(30,41,59,0.95); border:1px solid rgba(16,185,129,0.4); border-radius:14px; font-weight:600; color:#ffffff;" placeholder="Contoh: Rahasia12345" required>
+              <input type="password" name="password" id="modalPassInput" maxlength="63" class="form-control text-white p-3" minlength="8" style="background:rgba(30,41,59,0.95); border:1px solid rgba(16,185,129,0.4); border-radius:14px; font-weight:600; color:#ffffff;" placeholder="Contoh: Rahasia12345" required>
               <div class="form-text small" style="color:#e2e8f0; font-weight:600;">Gunakan minimal 8 kombinasi huruf dan angka. Simpan password baru ini baik-baik.</div>
+              <div id="passStatus" class="small fw-bold mt-3" style="display:none;" role="status" aria-live="polite"></div>
             </div>
           </div>
           <div class="modal-footer border-0 pt-0 pb-4 px-4 d-flex gap-2">
             <button type="button" class="btn btn-outline-secondary px-4 text-white" data-bs-dismiss="modal" style="border-radius:12px;">Batal</button>
-            <button type="submit" class="btn btn-success text-white fw-bold px-4 flex-grow-1" style="border-radius:12px;">Simpan Password</button>
+            <button type="submit" id="btnSimpanPassword" class="btn btn-success text-white fw-bold px-4 flex-grow-1" style="border-radius:12px;">Simpan Password</button>
           </div>
         </form>
       </div>
@@ -1477,14 +1479,123 @@
       modal.show();
     }
 
+    // ── Ganti nama WiFi / password: satu permintaan per tekan ────────────────
+    // Tombol dikunci sampai ACS menjawab, lalu dikunci lagi selama jeda dari
+    // server, karena setiap perubahan mengirim notifikasi WhatsApp ke pelanggan.
+    const wifiSibuk = { ssid: false, password: false };
+
+    function tampilStatusWifi(el, jenis, teks) {
+      const gaya = {
+        proses: { warna: '#93c5fd', ikon: 'bi-hourglass-split' },
+        sukses: { warna: '#86efac', ikon: 'bi-check-circle-fill' },
+        antre: { warna: '#fcd34d', ikon: 'bi-clock-history' },
+        gagal: { warna: '#fca5a5', ikon: 'bi-x-circle-fill' }
+      }[jenis];
+      el.style.display = 'block';
+      el.style.color = gaya.warna;
+      el.textContent = '';
+      const ikon = document.createElement('i');
+      ikon.className = 'bi ' + gaya.ikon + ' me-1';
+      el.appendChild(ikon);
+      el.appendChild(document.createTextNode(teks));
+    }
+
+    function kunciTombolWifi(jenis, tombol, labelAsli, detik) {
+      let sisa = detik;
+      tombol.disabled = true;
+      tombol.textContent = 'Tunggu ' + sisa + ' dtk';
+      const timer = setInterval(function () {
+        sisa--;
+        if (sisa <= 0) {
+          clearInterval(timer);
+          tombol.disabled = false;
+          tombol.textContent = labelAsli;
+          wifiSibuk[jenis] = false;
+        } else {
+          tombol.textContent = 'Tunggu ' + sisa + ' dtk';
+        }
+      }, 1000);
+    }
+
+    async function kirimGantiWifi(jenis, form, tombol, statusEl) {
+      if (wifiSibuk[jenis]) {
+        tampilStatusWifi(statusEl, 'proses', 'Permintaan sebelumnya masih diproses. Mohon tunggu...');
+        return;
+      }
+      wifiSibuk[jenis] = true;
+      const labelAsli = tombol.dataset.label || tombol.textContent.trim();
+      tombol.dataset.label = labelAsli;
+      tombol.disabled = true;
+      tombol.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status"></span>Menunggu ACS...';
+      const input = form.querySelector('input');
+      input.readOnly = true;
+      tampilStatusWifi(statusEl, 'proses', 'Perintah terkirim. Menunggu modem merespons ACS (biasanya 5-30 detik). Jangan tutup halaman ini.');
+
+      let data = null;
+      try {
+        const res = await fetch(form.action, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json',
+            'X-Requested-With': 'fetch'
+          },
+          body: new URLSearchParams(new FormData(form)).toString(),
+          credentials: 'same-origin'
+        });
+        data = await res.json().catch(function () { return null; });
+        if (!data) data = { ok: false, message: 'Respons server tidak terbaca (HTTP ' + res.status + ').' };
+      } catch (e) {
+        data = { ok: false, message: 'Koneksi ke server terputus. Periksa internet Anda lalu coba lagi.' };
+      }
+
+      input.readOnly = false;
+      if (data.ok && data.status === 'applied') {
+        tampilStatusWifi(statusEl, 'sukses', data.message);
+        if (jenis === 'ssid' && data.ssid) {
+          const tampil = document.getElementById('ssidDisplay');
+          if (tampil) tampil.textContent = data.ssid;
+        }
+      } else if (data.ok) {
+        tampilStatusWifi(statusEl, 'antre', data.message);
+      } else {
+        tampilStatusWifi(statusEl, 'gagal', data.message || 'Gagal memproses permintaan.');
+      }
+      if (jenis === 'password' && data.ok) input.value = '';
+
+      const jeda = Number(data.retryAfter) || 0;
+      if (jeda > 0) {
+        kunciTombolWifi(jenis, tombol, labelAsli, jeda);
+      } else {
+        tombol.disabled = false;
+        tombol.textContent = labelAsli;
+        wifiSibuk[jenis] = false;
+      }
+    }
+
+    document.getElementById('formGantiSsid').addEventListener('submit', function (e) {
+      e.preventDefault();
+      kirimGantiWifi('ssid', this, document.getElementById('btnSimpanSsid'), document.getElementById('ssidStatus'));
+    });
+    document.getElementById('formGantiPassword').addEventListener('submit', function (e) {
+      e.preventDefault();
+      kirimGantiWifi('password', this, document.getElementById('btnSimpanPassword'), document.getElementById('passStatus'));
+    });
+
     function editSsid(deviceId, currentSsid) {
-      document.getElementById('modalSsidInput').value = currentSsid || '';
+      const tampil = document.getElementById('ssidDisplay');
+      const sekarang = tampil ? tampil.textContent.trim() : '';
+      document.getElementById('modalSsidInput').value = (sekarang && sekarang !== '-') ? sekarang : (currentSsid || '');
+      if (!wifiSibuk.ssid) document.getElementById('ssidStatus').style.display = 'none';
       const m = new bootstrap.Modal(document.getElementById('editSsidModal'));
       m.show();
     }
 
     function editPassword(deviceId) {
-      document.getElementById('modalPassInput').value = '';
+      if (!wifiSibuk.password) {
+        document.getElementById('modalPassInput').value = '';
+        document.getElementById('passStatus').style.display = 'none';
+      }
       const m = new bootstrap.Modal(document.getElementById('editPasswordModal'));
       m.show();
     }
