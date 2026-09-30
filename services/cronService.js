@@ -8,7 +8,7 @@ const { logger } = require('../config/logger');
 const customerSvc = require('./customerService');
 const mikrotikService = require('./mikrotikService');
 const usageSvc = require('./usageService');
-const { getSetting, getNowLocal } = require('../config/settingsManager');
+const { getSetting, getNowLocal, getCurrentTimeInfo } = require('../config/settingsManager');
 const db = require('../config/database');
 const qrisUtil = require('../utils/qrisUtil');
 
@@ -43,6 +43,56 @@ function tanggalHariIniLokal() {
 
 function jamSekarangLokal() {
   return Number(String(getNowLocal() || '').slice(11, 13));
+}
+
+// ─── Kalender pengingat ──────────────────────────────────────────────────────
+// "Hari ini" diambil menurut timezone di pengaturan (bawaan Asia/Jakarta),
+// bukan zona jam server: server bisa berjalan di UTC, dan antara 00:00-07:00
+// WIB server UTC masih berada di tanggal kemarin.
+function hariIniLokal() {
+  const t = getCurrentTimeInfo();
+  return { y: t.year, m: t.month, d: t.day };
+}
+
+// Selisih hari kalender dari a ke b (b - a).
+function selisihHari(a, b) {
+  return Math.round((Date.UTC(b.y, b.m - 1, b.d) - Date.UTC(a.y, a.m - 1, a.d)) / 86400000);
+}
+
+// Tanggal jatuh tempo pada bulan tertentu. Jumlah hari tiap bulan berbeda
+// (28/29/30/31), jadi tanggal isolir 29-31 digeser ke hari terakhir bulan itu.
+function tanggalJatuhTempo(tahun, bulan, tanggalIsolir) {
+  const akhir = billingSvc.daysInMonth(tahun, bulan);
+  return { y: tahun, m: bulan, d: Math.min(Math.max(1, tanggalIsolir), akhir) };
+}
+
+/**
+ * Jatuh tempo terdekat yang belum lewat - bisa bulan ini atau bulan depan,
+ * sehingga pengingat tetap jalan melewati pergantian bulan.
+ * Contoh: hari ini 24 September, tanggal isolir 1 -> 1 Oktober, sisa 7 hari.
+ */
+function jatuhTempoBerikutnya(hariIni, tanggalIsolir) {
+  let tempo = tanggalJatuhTempo(hariIni.y, hariIni.m, tanggalIsolir);
+  if (selisihHari(hariIni, tempo) < 0) {
+    const bulan = hariIni.m === 12 ? 1 : hariIni.m + 1;
+    const tahun = hariIni.m === 12 ? hariIni.y + 1 : hariIni.y;
+    tempo = tanggalJatuhTempo(tahun, bulan, tanggalIsolir);
+  }
+  return Object.assign({}, tempo, { sisaHari: selisihHari(hariIni, tempo) });
+}
+
+function tanggalLokalDari(nilai) {
+  const m = String(nilai || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return { y: Number(m[1]), m: Number(m[2]), d: Number(m[3]) };
+  const t = new Date(nilai);
+  return isNaN(t.getTime()) ? null : { y: t.getFullYear(), m: t.getMonth() + 1, d: t.getDate() };
+}
+
+// Timezone untuk jadwal cron; nilai tak dikenal jatuh ke Asia/Jakarta supaya
+// aplikasi tidak gagal start.
+function zonaWaktuJadwal() {
+  const tz = String(getSetting('timezone', 'Asia/Jakarta') || 'Asia/Jakarta');
+  try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return tz; } catch (e) { return 'Asia/Jakarta'; }
 }
 
 function pengingatSudahJalanHariIni() {
@@ -284,8 +334,7 @@ function startCronJobs() {
     const batchSize = 15; // 15 pesan per batch (dari 20)
     const batchPauseMs = 120000; // Pause 2 menit setelah batch (dari 1 menit)
 
-    const today = new Date();
-    const day = today.getDate();
+    const hariIni = hariIniLokal();
     const reminderDays = (Array.isArray(hariManual) && hariManual.length)
       ? Array.from(new Set(hariManual.map(Number).filter(n => Number.isFinite(n) && n >= 1 && n <= 60)))
           .sort((a, b) => b - a)
@@ -312,6 +361,11 @@ function startCronJobs() {
     // Filter pelanggan yang perlu diingatkan
     const targetCustomers = [];
     const seenPhones = new Set();
+    // Pelanggan yang pernah ditagih memakai tanggal isolir; hanya prabayar
+    // murni (belum pernah punya tagihan) yang memakai masa aktif.
+    const punyaTagihan = new Set(db.prepare('SELECT DISTINCT customer_id FROM invoices').all().map(r => r.customer_id));
+    const tagihanPeriode = db.prepare('SELECT 1 FROM invoices WHERE customer_id=? AND period_month=? AND period_year=? LIMIT 1');
+    const hitungTunggakan = db.prepare("SELECT COUNT(*) AS n FROM invoices WHERE customer_id=? AND status='unpaid' AND (period_year * 12 + period_month) <= ?");
     for (const c of customers) {
       const phone = c.phone ? String(c.phone).trim() : '';
       if (!phone || phone.length < 9) continue;
@@ -320,42 +374,37 @@ function startCronJobs() {
       if (digits.startsWith('0')) digits = '62' + digits.slice(1);
       if (seenPhones.has(digits)) continue;
 
-      const unpaidCount = Number(c.unpaid_count || 0) || 0;
-      // Pelanggan yang punya tagihan belum lunas selalu diingatkan memakai
-      // tanggal isolir, apa pun jenis paketnya. Banyak paket ditandai
-      // "prepaid" padahal penagihannya tetap bulanan lewat tanggal isolir,
-      // dan kalau dipaksa memakai expired_at pelanggan tidak pernah cocok.
-      const isPrepaid = c.package_billing_type === 'prepaid' && unpaidCount === 0;
-      let shouldSend = false;
+      const tanggalIsolir = Number(c.isolate_day || 0) || Number(getSetting('isolir_day', 10) || 10) || 10;
+      let hMinus = null;
 
-      if (isPrepaid) {
-        if (c.expired_at) {
-          const expDate = new Date(c.expired_at);
-          if (!isNaN(expDate.getTime())) {
-            const diffMs = expDate.getTime() - today.getTime();
-            const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
-            if (reminderDays.includes(diffDays)) {
-              shouldSend = true;
-              c._hMinus = diffDays;
-            }
-          }
+      // Banyak paket ditandai "prepaid" padahal ditagih bulanan lewat tanggal
+      // isolir, jadi masa aktif hanya dipakai bila pelanggan belum pernah ditagih.
+      if (c.package_billing_type === 'prepaid' && !punyaTagihan.has(c.id)) {
+        const habis = tanggalLokalDari(c.expired_at);
+        if (habis) {
+          const sisa = selisihHari(hariIni, habis);
+          if (reminderDays.includes(sisa)) hMinus = sisa;
         }
       } else {
-        if (unpaidCount > 0) {
-          const dueDay = Number(c.isolate_day || 0) || Number(getSetting('isolir_day', 10) || 10) || 10;
-          // Cocokkan hari ini dengan salah satu hari pengingat aktif (H-7/H-5/H-3/H-1).
-          for (const h of reminderDays) {
-            const tanggalIngat = dueDay - h;
-            if (tanggalIngat >= 1 && day === tanggalIngat) {
-              shouldSend = true;
-              c._hMinus = h; // dipakai untuk variabel {{h-}}
-              break;
-            }
+        // Jatuh tempo terdekat, boleh di bulan depan (24 September -> 1 Oktober = H-7).
+        const tempo = jatuhTempoBerikutnya(hariIni, tanggalIsolir);
+        if (reminderDays.includes(tempo.sisaHari)) {
+          const tunggakan = hitungTunggakan.get(c.id, tempo.y * 12 + tempo.m).n;
+          const akanDitagih = ['active', 'ditangguhkan'].includes(c.status) && !!c.package_id;
+          if (tagihanPeriode.get(c.id, tempo.m, tempo.y)) {
+            // Tagihan periode itu sudah terbit: ingatkan bila masih ada yang belum lunas.
+            if (tunggakan > 0) hMinus = tempo.sisaHari;
+          } else if (akanDitagih || tunggakan > 0) {
+            // Belum terbit (baru dibuat tanggal 1): nominalnya diperkirakan saat kirim.
+            hMinus = tempo.sisaHari;
+            c._tagihanBelumTerbit = akanDitagih;
           }
+          if (hMinus !== null) c._periode = { m: tempo.m, y: tempo.y };
         }
       }
 
-      if (!shouldSend) continue;
+      if (hMinus === null) continue;
+      c._hMinus = hMinus; // dipakai untuk variabel {{h-}}
 
       seenPhones.add(digits);
       targetCustomers.push(c);
@@ -414,9 +463,20 @@ function startCronJobs() {
             await new Promise(r => setTimeout(r, randomDelay));
           }
 
-          const unpaidInvoices = billingSvc.getUnpaidInvoicesByCustomerId(c.id);
-          const totalTagihan = unpaidInvoices.reduce((sum, inv) => sum + (Number(inv.amount) || 0), 0);
-          const rincianBulan = unpaidInvoices.map(inv => `${inv.period_month}/${inv.period_year}`).join(', ');
+          // Yang diingatkan: semua tunggakan sampai periode jatuh tempo ini.
+          const periode = c._periode || null;
+          const batasPeriode = periode ? periode.y * 12 + periode.m : Infinity;
+          const unpaidInvoices = billingSvc.getUnpaidInvoicesByCustomerId(c.id)
+            .filter(inv => Number(inv.period_year) * 12 + Number(inv.period_month) <= batasPeriode);
+          // Tagihan periode jatuh tempo belum terbit (mis. 24 September untuk jatuh
+          // tempo 1 Oktober): nominalnya diperkirakan dengan rumus generate tagihan.
+          const perkiraanBelumTerbit = (periode && c._tagihanBelumTerbit)
+            ? billingSvc.estimateInvoiceAmount(c, periode.m, periode.y)
+            : 0;
+          const totalTagihan = unpaidInvoices.reduce((sum, inv) => sum + (Number(inv.amount) || 0), 0) + perkiraanBelumTerbit;
+          const daftarPeriode = unpaidInvoices.map(inv => `${inv.period_month}/${inv.period_year}`);
+          if (periode && c._tagihanBelumTerbit) daftarPeriode.push(`${periode.m}/${periode.y}`);
+          const rincianBulan = daftarPeriode.join(', ');
 
           // Process Dynamic QRIS if enabled & available
           let qrisImageBuffer = null;
@@ -425,7 +485,8 @@ function startCronJobs() {
           // {{harganoqris}} untuk pesan pengingat yang tidak butuh kode bayar.
           const tagihanTanpaKodeStr = totalTagihan.toLocaleString('id-ID');
 
-          if (unpaidInvoices.length > 0) {
+          // Kode unik QRIS hanya bila seluruh nominal berasal dari tagihan yang sudah terbit.
+          if (unpaidInvoices.length > 0 && !perkiraanBelumTerbit) {
             try {
               const inv = unpaidInvoices[0];
               let code = Number(inv.qris_unique_code || 0) || 0;
@@ -581,7 +642,7 @@ function startCronJobs() {
   // Dibuka untuk tombol kirim manual di panel admin.
   runnerPengingat = jalankanPengingatAman;
 
-  cron.schedule('0 7 * * *', () => jalankanPengingatAman({ susulan: false }));
+  cron.schedule('0 7 * * *', () => jalankanPengingatAman({ susulan: false }), { timezone: zonaWaktuJadwal() });
 
   // 3b. Jaring pengaman. Kalau jam 07:00 server sedang mati, WhatsApp belum
   //     terhubung, atau tagihan baru dibuat siang hari, pengingat hari itu
@@ -888,5 +949,6 @@ module.exports = {
   getReminderDays,
   formatHMinus,
   getDynamicDelayMs,
+  jatuhTempoBerikutnya,
   jalankanPengingatSekarang,
   statusPengingat, startCronJobs };

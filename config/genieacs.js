@@ -1133,8 +1133,14 @@ function monitoringAktif() {
     return !(v === false || v === 'false' || v === 0 || v === '0');
 }
 
+// Timezone jadwal dari pengaturan; nilai tak dikenal jatuh ke Asia/Jakarta.
+function zonaWaktuMonitoring() {
+    const tz = String(getSetting('timezone', 'Asia/Jakarta') || 'Asia/Jakarta');
+    try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return tz; } catch (e) { return 'Asia/Jakarta'; }
+}
+
 function scheduleMonitoring() {
-    // Sekali sehari jam 07:00 waktu server. Pemeriksaan saat startup dan
+    // Sekali sehari jam 07:00 menurut timezone di pengaturan. Pemeriksaan saat startup dan
     // interval 6/12 jam sengaja dihapus: alert redaman tinggi berulang kali
     // sehari membanjiri admin, owner, dan teknisi.
     cron.schedule('0 7 * * *', async () => {
@@ -1156,7 +1162,7 @@ function scheduleMonitoring() {
         } catch (error) {
             logger.error('[Monitoring] Error pada pemantauan offline:', error.message);
         }
-    });
+    }, { timezone: zonaWaktuMonitoring() });
 
     logger.info('[Monitoring] Pemeriksaan dijadwalkan sekali sehari jam 07:00' +
         (monitoringAktif() ? '.' : ' (saat ini toggle monitoring MATI).'));

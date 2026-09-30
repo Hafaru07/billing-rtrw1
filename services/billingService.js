@@ -96,6 +96,18 @@ function computeInvoiceAmountAndMeta(customer, pkg, periodMonth, periodYear) {
 }
 
 /**
+ * Perkiraan nominal tagihan yang belum diterbitkan untuk suatu periode, memakai
+ * rumus yang sama dengan generate tagihan (promo, prorata, PPN, USO).
+ * Hanya membaca, tidak menulis apa pun.
+ */
+function estimateInvoiceAmount(customer, periodMonth, periodYear) {
+  if (!customer || !customer.package_id) return 0;
+  const pkg = db.prepare('SELECT * FROM packages WHERE id=?').get(customer.package_id);
+  if (!pkg) return 0;
+  return computeInvoiceAmountAndMeta(customer, pkg, Number(periodMonth), Number(periodYear)).amount;
+}
+
+/**
  * options.dueFrom / options.dueTo (1-31): batasi ke pelanggan yang tanggal
  * isolirnya berada dalam rentang itu, supaya tagihan bisa digenerate bertahap
  * per gelombang penagihan. Tanpa opsi ini perilakunya sama seperti sebelumnya
@@ -740,6 +752,8 @@ function updatePaymentInfo(invoiceId, data) {
 module.exports = {
   getInvoicesByAny,
   getUnpaidInvoicesByCustomerId,
+  daysInMonth,
+  estimateInvoiceAmount,
   renewCustomerPrepaidValidity,
   generateMonthlyInvoices, generateInvoiceForCustomer, createInstallProrataCatchUpInvoice, payInvoiceForCustomerPeriod, payInvoicesForCustomerMonths, getPaidMonthsForCustomerYear, getCustomerBillingYearSummary, getAllInvoices, getInvoiceById,
   markAsPaid, markAsUnpaid, deleteInvoice,

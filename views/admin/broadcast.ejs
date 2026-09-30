@@ -246,8 +246,9 @@
       <div class="card-bd">
         <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
           Cadangan kalau jadwal otomatis jam 07:00 terlewat &mdash; server mati, WhatsApp belum tersambung,
-          atau tagihan baru dibuat siang hari. Pelanggan dipilih dari tanggal isolir dikurangi H- yang dicentang,
-          dan hanya yang punya tunggakan. Pesannya sama persis dengan pengingat otomatis.
+          atau tagihan baru dibuat siang hari. Pelanggan dipilih dari jatuh tempo terdekat &mdash; boleh bulan depan,
+          misalnya tanggal 24 September untuk jatuh tempo 1 Oktober pada H-7 &mdash; yang tagihan periode itu belum lunas
+          atau belum diterbitkan. Pesannya sama persis dengan pengingat otomatis.
         </div>
         <div style="font-size:11px;color:var(--warning);margin-bottom:12px">
           <i class="bi bi-exclamation-triangle"></i> Ini mengirim WhatsApp ke pelanggan sungguhan.
@@ -306,7 +307,7 @@ async function lihatTargetPengingat() {
     if (!data.ok) throw new Error(data.error);
     info.innerHTML = data.total
       ? '<span style="color:var(--success)">' + data.total + ' pelanggan akan dikirimi pengingat.</span> <span style="color:var(--muted)">(' + ringkasRincian(data.rincian) + ')</span>'
-      : '<span style="color:var(--warning)">Tidak ada pelanggan yang cocok. Pastikan tagihan sudah di-generate dan tanggal isolirnya sesuai.</span>';
+      : '<span style="color:var(--warning)">Tidak ada pelanggan yang jatuh tempo pada H- yang dicentang, atau tagihannya sudah lunas.</span>';
   } catch (e) {
     info.innerHTML = '<span style="color:var(--danger)">Gagal: ' + e.message + '</span>';
   }
