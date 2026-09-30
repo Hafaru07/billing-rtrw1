@@ -6551,12 +6551,15 @@ router.post('/api/whatsapp/test-reminder', requireAdminSession, restrictToAdmin,
     const namaContoh = String((req.body && req.body.nama) || 'Pelanggan Uji');
     const baseUrl = String(getSetting('public_base_url', '') || '').replace(/\/+$/, '');
     const link = baseUrl + '/customer/login';
+    // Periode contoh = bulan jatuh tempo pelanggan yang hari ini menerima H- ini
+    // (mis. 24 September + H-7 -> 1 Oktober -> 10/2026), sama seperti pengingat asli.
+    const tempoContoh = cronSvc.tanggalDalamHari(hMinus);
 
     const pesan = template
       .replace(/{{nama}}/gi, namaContoh)
       .replace(/{{tagihan}}/gi, '150.247')
       .replace(/{{harganoqris}}/gi, '150.000')
-      .replace(/{{rincian}}/gi, '9/2026')
+      .replace(/{{rincian}}/gi, `${tempoContoh.m}/${tempoContoh.y}`)
       .replace(/{{paket}}/gi, 'Paket Uji 10 Mbps')
       .replace(/{{link}}/gi, link)
       .replace(/{{h-}}/gi, cronSvc.formatHMinus(hMinus));

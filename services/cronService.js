@@ -81,6 +81,14 @@ function jatuhTempoBerikutnya(hariIni, tanggalIsolir) {
   return Object.assign({}, tempo, { sisaHari: selisihHari(hariIni, tempo) });
 }
 
+// Tanggal n hari dari hari ini (timezone setelan) - jatuh tempo pelanggan yang
+// hari ini menerima pengingat H-n.
+function tanggalDalamHari(hari) {
+  const t = hariIniLokal();
+  const d = new Date(Date.UTC(t.y, t.m - 1, t.d + (Number(hari) || 0)));
+  return { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate() };
+}
+
 function tanggalLokalDari(nilai) {
   const m = String(nilai || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (m) return { y: Number(m[1]), m: Number(m[2]), d: Number(m[3]) };
@@ -950,5 +958,6 @@ module.exports = {
   formatHMinus,
   getDynamicDelayMs,
   jatuhTempoBerikutnya,
+  tanggalDalamHari,
   jalankanPengingatSekarang,
   statusPengingat, startCronJobs };
