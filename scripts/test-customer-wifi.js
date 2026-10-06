@@ -14,15 +14,15 @@ function device(manufacturer, model, options = {}) {
   const wlan = {
     '1': {
       SSID: { _value: 'Home' },
-      KeyPassphrase: { _value: 'oldpassword' },
-      PreSharedKey: { '1': { KeyPassphrase: { _value: 'oldpassword' } } }
+      KeyPassphrase: { _value: 'old-wpa' },
+      PreSharedKey: { '1': { KeyPassphrase: { _value: 'old-wpa2' } } }
     }
   };
   if (options.five !== false) {
     wlan['5'] = {
       SSID: { _value: 'Home-5G' },
-      KeyPassphrase: { _value: 'oldpassword' },
-      PreSharedKey: { '1': { KeyPassphrase: { _value: 'oldpassword' } } }
+      KeyPassphrase: { _value: 'old-wpa' },
+      PreSharedKey: { '1': { KeyPassphrase: { _value: 'old-wpa2' } } }
     };
   }
   if (options.second) wlan['2'] = options.second;
@@ -88,7 +88,7 @@ test('vendor models select the correct main radios and password leaf', () => {
     ['Huawei', 'HG8145V5', 'huawei', 'PreSharedKey.1.KeyPassphrase'],
     ['Huawei', 'HG8245W5-6T', 'huawei', 'PreSharedKey.1.KeyPassphrase'],
     ['FiberHome', 'HG6145D2', 'fiberhome', 'KeyPassphrase'],
-    ['FiberHome', 'HG6145F1', 'fiberhome', 'KeyPassphrase'],
+    ['FiberHome', 'HG6145F1', 'fiberhome', 'PreSharedKey.1.KeyPassphrase'],
     ['Nokia', 'G-2425G-A', 'nokia', 'PreSharedKey.1.KeyPassphrase'],
     ['ZTE', 'F670L', 'zte', 'KeyPassphrase']
   ];
@@ -112,13 +112,49 @@ test('WLAN index 2 is only treated as 5 GHz when its radio metadata says so', ()
   assert.equal(targetWifi(guest).bands[1].ssidPath, root + '.2.SSID');
 });
 
-test('FiberHome HG6145F1 changes one password band with its KeyPassphrase path', async () => {
+test('FiberHome HG6145F1 writes only its WPA2 password path on 2.4 GHz', async () => {
   const { service, calls } = serviceWithAcs(device('FiberHome', 'HG6145F1'));
   const result = await service.changeWifiPassword('customer', 'newpassword', null, { band: '2.4G' });
   assert.equal(result.ok, true);
   assert.equal(result.status, 'applied');
   assert.equal(calls.length, 1);
-  assert.equal(calls[0][0][0], root + '.1.KeyPassphrase');
+  assert.equal(calls[0][0][0], root + '.1.PreSharedKey.1.KeyPassphrase');
+});
+
+test('FiberHome HG6145F1 writes only its WPA2 password path on 5 GHz', async () => {
+  const { service, calls } = serviceWithAcs(device('FiberHome', 'HG6145F1'));
+  const result = await service.changeWifiPassword('customer', 'newpassword', null, { band: '5G' });
+  assert.equal(result.status, 'applied');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0][0], root + '.5.PreSharedKey.1.KeyPassphrase');
+});
+
+test('HG6145F1 does not fall back to the WPA field when WPA2 is unavailable', async () => {
+  const doc = device('FiberHome', 'HG6145F1');
+  delete doc.InternetGatewayDevice.LANDevice['1'].WLANConfiguration['1'].PreSharedKey;
+  const { service, calls } = serviceWithAcs(doc);
+  const result = await service.changeWifiPassword('customer', 'newpassword', null, { band: '2.4G' });
+  assert.equal(result.status, 'unsupported');
+  assert.equal(calls.length, 0);
+});
+
+test('HG6145F1 never writes the WPA field even if its WPA2 task faults', async () => {
+  const { service, calls } = serviceWithAcs(device('FiberHome', 'HG6145F1'), () => ({
+    status: 202, data: { _id: '1' },
+    fault: { _id: 'onu-1:task_1', code: '9007', message: 'Invalid value' }
+  }));
+  const result = await service.changeWifiPassword('customer', 'newpassword', null, { band: '2.4G' });
+  assert.equal(result.status, 'failed');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0][0], root + '.1.PreSharedKey.1.KeyPassphrase');
+});
+
+test('HG6145F1 is recognized from the ACS device ID when ProductClass is blank', () => {
+  const doc = device('', '');
+  doc._id = '000AC2-HG6145F1-FHTTTEST123';
+  const mapped = targetWifi(doc);
+  assert.equal(mapped.vendor, 'fiberhome');
+  assert.equal(mapped.bands[0].passwordPaths[0], root + '.1.PreSharedKey.1.KeyPassphrase');
 });
 
 test('the 5 GHz password targets only the 5 GHz radio', async () => {
@@ -156,8 +192,8 @@ test('separate SSIDs update both radios independently', async () => {
   assert.equal(calls[1][0][1], 'Home5');
 });
 
-test('a rejected FiberHome password leaf falls back without touching the other band', async () => {
-  const { service, calls } = serviceWithAcs(device('FiberHome', 'HG6145F1'), (values, attempt) =>
+test('a rejected FiberHome D2 password leaf falls back without touching the other band', async () => {
+  const { service, calls } = serviceWithAcs(device('FiberHome', 'HG6145D2'), (values, attempt) =>
     attempt === 1
       ? { status: 202, data: { _id: '1' }, fault: { _id: 'onu-1:task_1', code: '9007', message: 'Invalid value' } }
       : { status: 200, data: {} }
@@ -169,9 +205,9 @@ test('a rejected FiberHome password leaf falls back without touching the other b
   assert.equal(calls[1][0][0], root + '.1.PreSharedKey.1.KeyPassphrase');
 });
 
-test('built-in ACS fault is recognized before trying the next FiberHome leaf', async () => {
+test('built-in ACS fault is recognized before trying the next FiberHome D2 leaf', async () => {
   const { service, calls } = serviceWithAcs(
-    device('FiberHome', 'HG6145F1'),
+    device('FiberHome', 'HG6145D2'),
     (_values, attempt) => ({ status: 202, data: { _id: String(attempt) } }),
     {
       serverId: 'builtin',
@@ -258,6 +294,10 @@ test('all supported vendor families send one shared-password task for Bandsteeri
     assert.equal(result.status, 'applied', model);
     assert.equal(calls.length, 1, model);
     assert.equal(calls[0].length, 4, model);
+    if (model === 'HG6145F1') {
+      assert.equal(calls[0][2][0], root + '.1.PreSharedKey.1.KeyPassphrase');
+      assert.equal(calls[0][3][0], root + '.5.PreSharedKey.1.KeyPassphrase');
+    }
   }
   const cmcc = device('ZTE', 'F663NV3A');
   cmcc.InternetGatewayDevice.LANDevice['1'].WLANConfiguration['1'].X_CMCC_Test = {};
@@ -270,7 +310,7 @@ test('all supported vendor families send one shared-password task for Bandsteeri
 });
 
 test('Bandsteering can use different password leaves on the two radios', async () => {
-  const doc = device('FiberHome', 'HG6145F1');
+  const doc = device('FiberHome', 'HG6145D2');
   const { service, calls } = serviceWithAcs(doc, (values, attempt) => {
     const accepted = values[2][0] === root + '.1.KeyPassphrase' &&
       values[3][0] === root + '.5.PreSharedKey.1.KeyPassphrase';
@@ -287,10 +327,10 @@ test('Bandsteering can use different password leaves on the two radios', async (
     ['Shared', 'Shared', 'newpassword', 'newpassword']);
 });
 
-test('FiberHome retries alternate password leaf after a queued task later faults', async () => {
+test('FiberHome D2 retries alternate password leaf after a queued task later faults', async () => {
   let faultReads = 0;
   const { service, calls } = serviceWithAcs(
-    device('FiberHome', 'HG6145F1'),
+    device('FiberHome', 'HG6145D2'),
     (_values, attempt) => attempt === 1
       ? { status: 202, data: { _id: '1' } }
       : { status: 200, data: { _id: '2' } },

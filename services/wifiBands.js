@@ -2,6 +2,7 @@ const WLAN_ROOT = 'InternetGatewayDevice.LANDevice.1.WLANConfiguration';
 
 const PSK_FIRST = ['PreSharedKey.1.KeyPassphrase', 'KeyPassphrase', 'PreSharedKey.1.PreSharedKey'];
 const KEY_FIRST = ['KeyPassphrase', 'PreSharedKey.1.KeyPassphrase', 'PreSharedKey.1.PreSharedKey'];
+const HG6145F1_WPA2 = ['PreSharedKey.1.KeyPassphrase'];
 
 function nodeAt(doc, path) {
   return String(path).split('.').reduce((node, part) => node && typeof node === 'object' ? node[part] : null, doc) || null;
@@ -22,7 +23,7 @@ function detectVendor(doc) {
   const model = String(id._ProductClass || '').toUpperCase();
   const keys = Object.keys(nodeAt(doc, WLAN_ROOT + '.1') || {});
   if (keys.some(key => key.startsWith('X_CMCC_'))) return 'zte-cmcc';
-  const identity = [id._Manufacturer, id._OUI, model].join(' ').toUpperCase();
+  const identity = [id._Manufacturer, id._OUI, model, doc?._id].join(' ').toUpperCase();
   if (/HUAWEI|HWTC/.test(identity) || keys.some(key => key.startsWith('X_HW_'))) return 'huawei';
   if (/FIBERHOME|FHTT|HG6145(?:D2|F1)/.test(identity)) return 'fiberhome';
   if (/NOKIA|ALCL|ALCATEL/.test(identity) || /^G-\d/.test(model) || keys.some(key => key.startsWith('X_ALU'))) return 'nokia';
@@ -43,8 +44,11 @@ function isFiveGhz(doc, base) {
 
 function targetWifi(doc) {
   const vendor = detectVendor(doc);
-  // FiberHome exposes WLANConfiguration.{1,5}.KeyPassphrase as its WiFi password.
-  const leaves = ['huawei', 'nokia'].includes(vendor) ? PSK_FIRST : KEY_FIRST;
+  const model = [doc?._deviceId?._ProductClass, valueAt(doc, 'InternetGatewayDevice.DeviceInfo.ModelName'), doc?._id].join(' ');
+  // HG6145F1 exposes separate WPA and WPA2 passphrases; target its WPA2 leaf only.
+  const leaves = vendor === 'fiberhome' && /HG6145F1/i.test(model)
+    ? HG6145F1_WPA2
+    : (['huawei', 'nokia'].includes(vendor) ? PSK_FIRST : KEY_FIRST);
   const bands = [];
 
   const fiveBase = WLAN_ROOT + '.5';
