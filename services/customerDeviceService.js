@@ -939,6 +939,7 @@ const FAULT_COBA_LEAF_LAIN = /900[357]/;
 
 // Hanya satu perubahan WiFi per perangkat dalam satu waktu.
 const wifiSedangDiproses = new Map(); // deviceId -> waktu mulai (ms)
+const wifiTaskAntre = new Set();
 const BATAS_KUNCI_WIFI_MS = 3 * 60 * 1000;
 
 async function ambilPohonWifi(instance, deviceId) {
@@ -1010,7 +1011,11 @@ async function kirimSetParameter(instance, deviceId, parameterValues, serverId) 
     const deadline = Date.now() + 4000;
     do {
       const task = db.prepare('SELECT status, result FROM acs_tasks WHERE id = ? AND device_id = ?').get(taskId, deviceId);
-      if (task?.status === 'completed') return { hasil: 'applied', taskId };
+      if (task?.status === 'completed') {
+        let response = {};
+        try { response = JSON.parse(task.result || '{}'); } catch (_) {}
+        return { hasil: String(response.status) === '1' ? 'queued' : 'applied', taskId, deferred: String(response.status) === '1' };
+      }
       if (task?.status === 'failed') {
         let fault = {};
         try { fault = JSON.parse(task.result || '{}'); } catch (_) {}
@@ -1043,6 +1048,62 @@ async function kirimSetParameter(instance, deviceId, parameterValues, serverId) 
   return { hasil: 'queued', taskId };
 }
 
+// Fault pada task antre dapat datang setelah respons HTTP 202. Coba leaf
+// password berikutnya hanya setelah ACS memastikan task sebelumnya gagal.
+async function pantauFallbackWifi(instance, deviceId, serverId, candidates, index, taskId) {
+  for (let i = index; i < candidates.length; i++) {
+    if (i !== index) {
+      const next = await kirimSetParameter(instance, deviceId, candidates[i], serverId);
+      if (next.hasil === 'applied') return 'done';
+      if (next.hasil === 'fault') continue;
+      if (next.hasil !== 'queued' || !next.taskId) return 'unknown';
+      taskId = next.taskId;
+    }
+    let failed = false;
+    for (let check = 0; check < 6; check++) {
+      await new Promise(resolve => {
+        const timer = setTimeout(resolve, 60000);
+        if (timer.unref) timer.unref();
+      });
+      let status = 'unknown';
+      try { status = await statusTaskAcs({ serverId, deviceId, taskId }); }
+      catch (e) { logger.warn('[WiFi] Status task ' + taskId + ' belum terbaca: ' + e.message); }
+      if (status === 'done') return 'done';
+      if (status === 'fault') {
+        logger.warn('[WiFi] Task ' + taskId + ' ditolak ' + deviceId + '; mencoba leaf password berikutnya.');
+        if (serverId !== 'builtin') {
+          try { await instance.delete('/tasks/' + encodeURIComponent(taskId), { timeout: 10000, validateStatus: () => true }); } catch (_) {}
+        }
+        failed = true;
+        break;
+      }
+    }
+    if (!failed) return 'pending';
+    if (i === candidates.length - 1) return 'fault';
+  }
+  return 'fault';
+}
+
+async function kirimWifiDenganFallback(instance, deviceId, serverId, candidates) {
+  let last = null;
+  let lastIndex = 0;
+  for (let i = 0; i < candidates.length; i++) {
+    const result = await kirimSetParameter(instance, deviceId, candidates[i], serverId);
+    last = result;
+    lastIndex = i;
+    if (result.hasil === 'applied') return { ...result, completion: Promise.resolve('done'), candidate: i };
+    if (result.hasil === 'queued') {
+      const completion = result.taskId
+        ? pantauFallbackWifi(instance, deviceId, serverId, candidates, i, result.taskId)
+        : Promise.resolve('unknown');
+      completion.catch(e => logger.warn('[WiFi] Gagal memantau task ' + deviceId + ': ' + e.message));
+      return { ...result, completion, candidate: i };
+    }
+    if (result.hasil !== 'fault' || !FAULT_COBA_LEAF_LAIN.test(result.kode)) break;
+  }
+  return last ? { ...last, candidate: lastIndex } : { hasil: 'error', pesan: 'Tidak ada parameter password yang tersedia.' };
+}
+
 function validateWifiSsid(ssid) {
   const s = String(ssid ?? '').replace(/[\r\n\t]+/g, '').trim();
   if (!s) return { error: 'Nama WiFi tidak boleh kosong.' };
@@ -1068,10 +1129,11 @@ async function ubahWifi(tag, jenis, nilaiPerBand, actor, wajib5g = false) {
 
   const deviceId = device._id;
   const mulai = wifiSedangDiproses.get(deviceId);
-  if (mulai && Date.now() - mulai < BATAS_KUNCI_WIFI_MS) {
+  if (wifiTaskAntre.has(deviceId) || (mulai && Date.now() - mulai < BATAS_KUNCI_WIFI_MS)) {
     return { ok: false, status: 'busy', message: 'Permintaan sebelumnya masih diproses ACS. Mohon tunggu sampai selesai.' };
   }
   wifiSedangDiproses.set(deviceId, Date.now());
+  let pendingCompletion = null;
 
   try {
     const server = device._acs_server_id
@@ -1091,6 +1153,73 @@ async function ubahWifi(tag, jenis, nilaiPerBand, actor, wajib5g = false) {
     }
 
     const { vendor, bands } = targetWifi(doc);
+    if (jenis === 'steering' || jenis === 'password-both') {
+      const wifi24 = bands.find(item => item.band === '2.4G');
+      const wifi5 = bands.find(item => item.band === '5G');
+      if (!wifi24 || !wifi5 || !wifi24.passwordPaths.length || !wifi5.passwordPaths.length ||
+          (jenis === 'steering' && (!wifi24.ssidPath || !wifi5.ssidPath))) {
+        return { ok: false, status: 'unsupported', vendor, message: 'Pengaturan WiFi kedua band tidak dapat diubah lewat ACS pada modem ini.' };
+      }
+      if (jenis === 'password-both' && wifi24.ssidValue !== wifi5.ssidValue) {
+        return { ok: false, status: 'invalid', vendor, message: 'Nama WiFi kedua band berbeda. Pilih satu band untuk mengubah password.' };
+      }
+      await bersihkanTaskWifiGagal(instance, deviceId);
+      const pairs = [];
+      for (let i = 0; i < Math.max(wifi24.passwordPaths.length, wifi5.passwordPaths.length); i++) {
+        if (wifi24.passwordPaths[i] && wifi5.passwordPaths[i]) pairs.push([i, i]);
+      }
+      for (let i = 0; i < wifi24.passwordPaths.length; i++) {
+        for (let j = 0; j < wifi5.passwordPaths.length; j++) {
+          if (i !== j) pairs.push([i, j]);
+        }
+      }
+      const candidates = pairs.map(([i, j]) => {
+        const password = nilaiPerBand.password;
+        const values = jenis === 'steering'
+          ? [[wifi24.ssidPath, nilaiPerBand.ssid, 'xsd:string'], [wifi5.ssidPath, nilaiPerBand.ssid, 'xsd:string']]
+          : [];
+        values.push(
+          [wifi24.passwordPaths[i], password, 'xsd:string'],
+          [wifi5.passwordPaths[j], password, 'xsd:string']
+        );
+        return values;
+      });
+      const result = await kirimWifiDenganFallback(instance, deviceId, server.id, candidates);
+      if (result.hasil !== 'applied' && result.hasil !== 'queued') {
+        return { ok: false, status: 'failed', vendor, message: 'Modem menolak perubahan password kedua band' +
+          (result.kode ? ' (kode ' + result.kode + ')' : '') + '. Hubungi admin.' };
+      }
+      const ssid = jenis === 'steering' ? nilaiPerBand.ssid : wifi24.ssidValue;
+      const ssid5g = jenis === 'steering' ? nilaiPerBand.ssid : wifi5.ssidValue;
+      const acs = { serverId: server.id, deviceId, taskId: result.taskId || '' };
+      const bandResult = { status: result.hasil, ssid, acs, deferred: !!result.deferred };
+      if (result.hasil === 'queued') pendingCompletion = result.completion;
+      if (actor) {
+        auditTrail.logAuditTrail({
+          action: jenis === 'steering' ? 'UPDATE_SSID' : 'UPDATE_PASSWORD',
+          entity_type: 'device', entity_id: tag,
+          actor_type: actor.type || 'unknown', actor_id: actor.id || null,
+          actor_name: actor.name || null,
+          details: { band: 'both', status: result.hasil, vendor, path: candidates[result.candidate].map(v => v[0]) },
+          ip_address: actor.ip || null, user_agent: actor.userAgent || null
+        });
+      }
+      return {
+        ok: true, status: result.hasil, vendor,
+        bands: { '2.4G': bandResult, '5G': { ...bandResult, ssid: ssid5g } },
+        message: result.hasil === 'applied'
+          ? (jenis === 'steering' ? 'Nama dan password WiFi kedua band' : 'Password WiFi kedua band') + ' berhasil diterapkan. Sambungkan ulang perangkat Anda.'
+          : result.deferred
+            ? 'Modem sudah menyimpan perubahan, tetapi belum menerapkannya. Restart modem mungkin diperlukan.'
+            : (jenis === 'steering' ? 'Perubahan nama dan password kedua band' : 'Perubahan password kedua band') + ' masih antre di ACS. Sambungkan ulang setelah modem menerapkannya.',
+        ssid, ssid5g, acs, completion: result.completion
+      };
+    }
+    if (jenis === 'password' && bands.some(item => item.band === '5G') &&
+        bands.find(item => item.band === '2.4G')?.ssidValue === bands.find(item => item.band === '5G')?.ssidValue &&
+        Object.keys(nilaiPerBand).length === 1) {
+      return { ok: false, status: 'invalid', vendor, message: 'Bandsteering aktif. Ubah password kedua band sekaligus.' };
+    }
     const requested = Object.entries(nilaiPerBand).filter(([, value]) => value !== undefined);
     const missing = requested.find(([band]) => !bands.some(target => target.band === band));
     if (missing && (missing[0] !== '5G' || wajib5g)) {
@@ -1123,42 +1252,42 @@ async function ubahWifi(tag, jenis, nilaiPerBand, actor, wajib5g = false) {
       }
 
       const paths = jenis === 'ssid' ? [target.ssidPath] : target.passwordPaths;
-      let last = null;
-      for (const path of paths) {
-        const result = await kirimSetParameter(instance, deviceId, [[path, value, 'xsd:string']], server.id);
-        last = result;
-        if (result.hasil === 'applied' || result.hasil === 'queued') {
-          hasilBand[band] = {
-            status: result.hasil,
-            ssid: jenis === 'ssid' ? value : target.ssidValue,
-            acs: { serverId: server.id, deviceId, taskId: result.taskId || '' }
-          };
-          logger.info('[WiFi] ' + jenis + ' ' + band + ' ' + result.hasil + ' di ' + deviceId + ' (' + vendor + ') lewat ' + path);
-          if (actor) {
-            auditTrail.logAuditTrail({
-              action: jenis === 'ssid' ? 'UPDATE_SSID' : 'UPDATE_PASSWORD',
-              entity_type: 'device', entity_id: tag,
-              actor_type: actor.type || 'unknown', actor_id: actor.id || null,
-              actor_name: actor.name || null,
-              details: jenis === 'ssid'
-                ? { band, newSSID: value, status: result.hasil, vendor, path }
-                : { band, status: result.hasil, vendor, path },
-              ip_address: actor.ip || null, user_agent: actor.userAgent || null
-            });
-          }
-          break;
+      const candidates = paths.map(path => [[path, value, 'xsd:string']]);
+      const result = await kirimWifiDenganFallback(instance, deviceId, server.id, candidates);
+      const path = paths[result.candidate || 0];
+      if (result.hasil === 'applied' || result.hasil === 'queued') {
+        hasilBand[band] = {
+          status: result.hasil,
+          ssid: jenis === 'ssid' ? value : target.ssidValue,
+          acs: { serverId: server.id, deviceId, taskId: result.taskId || '' },
+          deferred: !!result.deferred
+        };
+        if (result.completion) hasilBand[band].completion = result.completion;
+        logger.info('[WiFi] ' + jenis + ' ' + band + ' ' + result.hasil + ' di ' + deviceId + ' (' + vendor + ') lewat ' + path);
+        if (actor) {
+          auditTrail.logAuditTrail({
+            action: jenis === 'ssid' ? 'UPDATE_SSID' : 'UPDATE_PASSWORD',
+            entity_type: 'device', entity_id: tag,
+            actor_type: actor.type || 'unknown', actor_id: actor.id || null,
+            actor_name: actor.name || null,
+            details: jenis === 'ssid'
+              ? { band, newSSID: value, status: result.hasil, vendor, path }
+              : { band, status: result.hasil, vendor, path },
+            ip_address: actor.ip || null, user_agent: actor.userAgent || null
+          });
         }
+      } else {
         logger.warn('[WiFi] ' + jenis + ' ' + band + ' ditolak ' + deviceId + ' (' + vendor + ') lewat ' + path +
           ': ' + (result.kode || '') + ' ' + (result.pesan || ''));
-        if (result.hasil !== 'fault' || !FAULT_COBA_LEAF_LAIN.test(result.kode)) break;
+        hasilBand[band] = { status: 'failed', code: result.kode || '' };
       }
-      if (!hasilBand[band]) hasilBand[band] = { status: 'failed', code: last?.kode || '' };
     }
 
     const entries = Object.entries(hasilBand);
     const failed = entries.filter(([, result]) => result.status === 'failed');
     const changed = entries.filter(([, result]) => result.status === 'applied' || result.status === 'queued');
     const queued = changed.some(([, result]) => result.status === 'queued');
+    const deferred = changed.some(([, result]) => result.deferred);
     const label = jenis === 'ssid' ? 'Nama WiFi' : 'Password WiFi';
     const bandNames = changed.map(([band]) => band === '2.4G' ? '2,4 GHz' : '5 GHz').join(' dan ');
     const status = failed.length ? (changed.length ? 'partial' : 'failed') : (queued ? 'queued' : 'applied');
@@ -1168,18 +1297,33 @@ async function ubahWifi(tag, jenis, nilaiPerBand, actor, wajib5g = false) {
         (changed.length ? '. Perubahan ' + bandNames + ' berhasil dikirim.' : '. Hubungi admin.')
       : changed.length
         ? label + ' ' + bandNames + (queued
-          ? ' sudah dikirim ke ACS dan akan diterapkan saat modem tersambung.'
+          ? (deferred ? ' sudah disimpan modem tetapi belum diterapkan; restart modem mungkin diperlukan.' : ' sudah dikirim ke ACS dan akan diterapkan saat modem tersambung.')
           : ' berhasil diterapkan. Sambungkan ulang perangkat Anda.')
         : 'Nama WiFi sudah sesuai dengan pengaturan saat ini.';
     const firstTask = changed.find(([, result]) => result.acs)?.[1].acs || null;
+    const pendingTasks = changed.filter(([, result]) => result.status === 'queued' && result.completion)
+      .map(([, result]) => result.completion);
+    if (pendingTasks.length) {
+      pendingCompletion = Promise.all(pendingTasks)
+        .then(statuses => statuses.every(status => status === 'done') ? 'done' : statuses.find(status => status !== 'done'));
+    }
     return {
       ok: !failed.length, status, vendor, bands: hasilBand, message,
       ssid: hasilBand['2.4G']?.ssid || bands.find(item => item.band === '2.4G')?.ssidValue || '',
       ssid5g: hasilBand['5G']?.ssid || bands.find(item => item.band === '5G')?.ssidValue || '',
-      acs: firstTask
+      acs: firstTask,
+      completion: pendingCompletion
     };
   } finally {
-    wifiSedangDiproses.delete(deviceId);
+    if (pendingCompletion) {
+      wifiTaskAntre.add(deviceId);
+      pendingCompletion.then(
+        () => { wifiTaskAntre.delete(deviceId); wifiSedangDiproses.delete(deviceId); },
+        () => { wifiTaskAntre.delete(deviceId); wifiSedangDiproses.delete(deviceId); }
+      );
+    } else {
+      wifiSedangDiproses.delete(deviceId);
+    }
   }
 }
 
@@ -1187,8 +1331,17 @@ async function changeWifiSsid(tag, ssid, actor = null, options = {}) {
   const cek = validateWifiSsid(ssid);
   if (cek.error) return { ok: false, status: 'invalid', message: cek.error };
   const has5g = Object.prototype.hasOwnProperty.call(options, 'ssid5g');
+  if (options.bandSteering && !has5g) {
+    return { ok: false, status: 'invalid', message: 'Bandsteering memerlukan nama WiFi 5 GHz.' };
+  }
   const cek5g = has5g ? validateWifiSsid(options.bandSteering ? cek.value : options.ssid5g) : { value: cek.value };
   if (cek5g.error) return { ok: false, status: 'invalid', message: 'WiFi 5 GHz: ' + cek5g.error };
+  const steering = has5g && (options.bandSteering || cek.value === cek5g.value);
+  if (steering) {
+    const password = validateWifiPassword(options.password);
+    if (password.error) return { ok: false, status: 'invalid', message: 'Bandsteering memerlukan password baru. ' + password.error };
+    return ubahWifi(tag, 'steering', { ssid: cek.value, password: password.value }, actor, true);
+  }
   return ubahWifi(tag, 'ssid', { '2.4G': cek.value, '5G': cek5g.value }, actor, has5g);
 }
 
@@ -1196,9 +1349,10 @@ async function changeWifiPassword(tag, password, actor = null, options = {}) {
   const cek = validateWifiPassword(password);
   if (cek.error) return { ok: false, status: 'invalid', message: cek.error };
   const band = options.band || null;
-  if (band && band !== '2.4G' && band !== '5G') {
+  if (band && band !== '2.4G' && band !== '5G' && band !== 'both') {
     return { ok: false, status: 'invalid', message: 'Band WiFi tidak valid.' };
   }
+  if (band === 'both') return ubahWifi(tag, 'password-both', { password: cek.value }, actor, true);
   const values = band ? { [band]: cek.value } : { '2.4G': cek.value, '5G': cek.value };
   return ubahWifi(tag, 'password', values, actor, band === '5G');
 }
@@ -1450,8 +1604,12 @@ async function requestReboot(tag, actor = null) {
 async function statusTaskAcs(acs) {
   if (!acs || !acs.deviceId || !acs.taskId) return 'unknown';
   if (acs.serverId === 'builtin') {
-    const row = db.prepare('SELECT status FROM acs_tasks WHERE id = ? AND device_id = ?').get(acs.taskId, acs.deviceId);
-    if (row?.status === 'completed') return 'done';
+    const row = db.prepare('SELECT status, result FROM acs_tasks WHERE id = ? AND device_id = ?').get(acs.taskId, acs.deviceId);
+    if (row?.status === 'completed') {
+      let response = {};
+      try { response = JSON.parse(row.result || '{}'); } catch (_) {}
+      return String(response.status) === '1' ? 'pending' : 'done';
+    }
     if (row?.status === 'failed') return 'fault';
     return row ? 'pending' : 'unknown';
   }

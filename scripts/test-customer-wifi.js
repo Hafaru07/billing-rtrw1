@@ -39,8 +39,8 @@ function serviceWithAcs(doc, responder = () => ({ status: 200, data: {} }), opti
   const instance = {
     get: async url => {
       if (url === '/devices' || url === '/devices/') return { data: [doc] };
-      if (url === '/tasks/') return { data: [] };
-      if (url === '/faults/') return { data: fault ? [fault] : [] };
+      if (url === '/tasks/') return { data: options.tasks ? options.tasks(calls) : [] };
+      if (url === '/faults/') return { data: options.faults ? options.faults(calls) : (fault ? [fault] : []) };
       return { data: [] };
     },
     post: async (url, body) => {
@@ -77,7 +77,7 @@ function serviceWithAcs(doc, responder = () => ({ status: 200, data: {} }), opti
       if (!(name in mocks)) throw new Error('Unexpected import: ' + name);
       return mocks[name];
     },
-    Buffer, Date, Map, Set, Promise, console, setTimeout, clearTimeout
+    Buffer, Date, Map, Set, Promise, console, setTimeout: options.setTimeout || setTimeout, clearTimeout
   };
   vm.runInNewContext(serviceSource, sandbox, { filename: servicePath });
   return { service: module.exports, calls };
@@ -147,6 +147,15 @@ test('a legacy SSID change still works when the 5 GHz SSID is not writable', asy
   assert.equal(calls[0][0][0], root + '.1.SSID');
 });
 
+test('separate SSIDs update both radios independently', async () => {
+  const { service, calls } = serviceWithAcs(device('Huawei', 'HG8145V5'));
+  const result = await service.changeWifiSsid('customer', 'Home24', null, { ssid5g: 'Home5' });
+  assert.equal(result.status, 'applied');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0][0][1], 'Home24');
+  assert.equal(calls[1][0][1], 'Home5');
+});
+
 test('a rejected FiberHome password leaf falls back without touching the other band', async () => {
   const { service, calls } = serviceWithAcs(device('FiberHome', 'HG6145F1'), (values, attempt) =>
     attempt === 1
@@ -178,25 +187,130 @@ test('built-in ACS fault is recognized before trying the next FiberHome leaf', a
   assert.equal(await service.statusTaskAcs({ serverId: 'builtin', deviceId: 'onu-1', taskId: '2' }), 'done');
 });
 
-test('Bandsteering synchronizes SSIDs, while an independent 5 GHz failure stays visible', async () => {
-  const { service, calls } = serviceWithAcs(device('ZTE', 'F670L'), (values, attempt) =>
-    attempt === 2
-      ? { status: 202, data: { _id: '2' }, fault: { _id: 'onu-1:task_2', code: '9007', message: 'Rejected' } }
-      : { status: 200, data: {} }
+test('built-in ACS Status 1 is not reported as an applied password', async () => {
+  const { service } = serviceWithAcs(
+    device('FiberHome', 'HG6145F1'),
+    () => ({ status: 202, data: { _id: '1' } }),
+    { serverId: 'builtin', taskRow: () => ({ status: 'completed', result: '{"status":"1"}' }) }
   );
-  const result = await service.changeWifiSsid('customer', 'SameHome', null,
+  const result = await service.changeWifiPassword('customer', 'newpassword', null, { band: '2.4G' });
+  assert.equal(result.status, 'queued');
+  assert.match(result.message, /belum diterapkan/);
+  assert.equal(await service.statusTaskAcs({ serverId: 'builtin', deviceId: 'onu-1', taskId: '1' }), 'pending');
+});
+
+test('Bandsteering requires a chosen password and sends both radios in one ACS task', async () => {
+  const { service, calls } = serviceWithAcs(device('ZTE', 'F670L'));
+  const missing = await service.changeWifiSsid('customer', 'SameHome', null,
     { ssid5g: 'Different', bandSteering: true });
+  assert.equal(missing.status, 'invalid');
+  assert.equal(calls.length, 0);
+  const result = await service.changeWifiSsid('customer', 'SameHome', null,
+    { ssid5g: 'Different', bandSteering: true, password: 'newpassword' });
+  assert.equal(result.status, 'applied');
+  assert.equal(calls.length, 1);
+  assert.deepEqual(Array.from(calls[0], value => value[1]),
+    ['SameHome', 'SameHome', 'newpassword', 'newpassword']);
+  assert.equal(result.ssid5g, 'SameHome');
+});
+
+test('matching SSIDs activate Bandsteering automatically and password uses one task', async () => {
+  const doc = device('FiberHome', 'HG6145F1');
+  doc.InternetGatewayDevice.LANDevice['1'].WLANConfiguration['5'].SSID._value = 'Home';
+  const { service, calls } = serviceWithAcs(doc);
+  const missing = await service.changeWifiSsid('customer', 'SameHome', null, { ssid5g: 'SameHome' });
+  assert.equal(missing.status, 'invalid');
+  const result = await service.changeWifiSsid('customer', 'SameHome', null,
+    { ssid5g: 'SameHome', password: 'newpassword' });
+  assert.equal(result.status, 'applied');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].length, 4);
+  const changedPassword = await service.changeWifiPassword('customer', 'otherpassword', null, { band: 'both' });
+  assert.equal(changedPassword.status, 'applied');
+  assert.equal(calls[1].length, 2);
+});
+
+test('a single-band password change is rejected when Bandsteering is active', async () => {
+  const doc = device('FiberHome', 'HG6145F1');
+  doc.InternetGatewayDevice.LANDevice['1'].WLANConfiguration['5'].SSID._value = 'Home';
+  const { service, calls } = serviceWithAcs(doc);
+  const result = await service.changeWifiPassword('customer', 'newpassword', null, { band: '5G' });
+  assert.equal(result.status, 'invalid');
+  assert.equal(calls.length, 0);
+});
+
+test('a shared password is rejected while the SSIDs are separate', async () => {
+  const { service, calls } = serviceWithAcs(device('FiberHome', 'HG6145F1'));
+  const result = await service.changeWifiPassword('customer', 'newpassword', null, { band: 'both' });
+  assert.equal(result.status, 'invalid');
+  assert.equal(calls.length, 0);
+});
+
+test('all supported vendor families send one shared-password task for Bandsteering', async () => {
+  for (const [vendor, model] of [
+    ['Huawei', 'HG8145V5'], ['Huawei', 'HG8245W5'],
+    ['FiberHome', 'HG6145D2'], ['FiberHome', 'HG6145F1'],
+    ['Nokia', 'G-2425G-A'], ['ZTE', 'F670L']
+  ]) {
+    const { service, calls } = serviceWithAcs(device(vendor, model));
+    const result = await service.changeWifiSsid('customer', 'Shared', null,
+      { ssid5g: 'Shared', password: 'newpassword' });
+    assert.equal(result.status, 'applied', model);
+    assert.equal(calls.length, 1, model);
+    assert.equal(calls[0].length, 4, model);
+  }
+  const cmcc = device('ZTE', 'F663NV3A');
+  cmcc.InternetGatewayDevice.LANDevice['1'].WLANConfiguration['1'].X_CMCC_Test = {};
+  const { service, calls } = serviceWithAcs(cmcc);
+  const result = await service.changeWifiSsid('customer', 'Shared', null,
+    { ssid5g: 'Shared', password: 'newpassword' });
+  assert.equal(result.vendor, 'zte-cmcc');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].length, 4);
+});
+
+test('Bandsteering can use different password leaves on the two radios', async () => {
+  const doc = device('FiberHome', 'HG6145F1');
+  const { service, calls } = serviceWithAcs(doc, (values, attempt) => {
+    const accepted = values[2][0] === root + '.1.KeyPassphrase' &&
+      values[3][0] === root + '.5.PreSharedKey.1.KeyPassphrase';
+    return accepted
+      ? { status: 200, data: {} }
+      : { status: 202, data: { _id: String(attempt) },
+        fault: { _id: 'onu-1:task_' + attempt, code: '9007', message: 'Invalid parameter' } };
+  });
+  const result = await service.changeWifiSsid('customer', 'Shared', null,
+    { ssid5g: 'Shared', password: 'newpassword' });
+  assert.equal(result.status, 'applied');
+  assert.equal(calls.length, 3);
+  assert.deepEqual(Array.from(calls[2], value => value[1]),
+    ['Shared', 'Shared', 'newpassword', 'newpassword']);
+});
+
+test('FiberHome retries alternate password leaf after a queued task later faults', async () => {
+  let faultReads = 0;
+  const { service, calls } = serviceWithAcs(
+    device('FiberHome', 'HG6145F1'),
+    (_values, attempt) => attempt === 1
+      ? { status: 202, data: { _id: '1' } }
+      : { status: 200, data: { _id: '2' } },
+    {
+      faults: callsNow => callsNow.length === 1 && ++faultReads > 3
+        ? [{ _id: 'onu-1:task_1', code: '9007', message: 'Invalid parameter' }]
+        : [],
+      setTimeout: callback => { queueMicrotask(callback); return { unref() {} }; }
+    }
+  );
+  const result = await service.changeWifiPassword('customer', 'newpassword', null, { band: '2.4G' });
+  assert.equal(result.status, 'queued');
+  assert.equal(await result.completion, 'done');
   assert.equal(calls.length, 2);
-  assert.equal(calls[0][0][1], 'SameHome');
-  assert.equal(calls[1][0][1], 'SameHome');
-  assert.equal(result.status, 'partial');
-  assert.equal(result.bands['2.4G'].status, 'applied');
-  assert.equal(result.bands['5G'].status, 'failed');
+  assert.equal(calls[1][0][0], root + '.1.PreSharedKey.1.KeyPassphrase');
 });
 
 test('customer dashboard renders both radios and valid browser JavaScript', async () => {
   const viewPath = path.join(__dirname, '../views/dashboard.ejs');
-  const html = await ejs.renderFile(viewPath, {
+  const locals = {
     lang: 'id', t: (_key, fallback) => fallback,
     customerBalance: 0,
     customer: {
@@ -207,11 +321,18 @@ test('customer dashboard renders both radios and valid browser JavaScript', asyn
     profile: { id: 1, name: 'Pelanggan', status: 'active', phone: '081200000000' },
     settings: {}, notif: null, invoices: [], tickets: [], paymentChannels: [],
     connectedUsers: [], showPPOB: false, trafficMaxDownMbps: 10, trafficMaxUpMbps: 10
-  });
+  };
+  const html = await ejs.renderFile(viewPath, locals);
   assert.match(html, /id="ssid5gDisplay"/);
   assert.match(html, /id="bandSteeringToggle"/);
+  assert.match(html, /id="steeringPasswordInput"/);
+  assert.match(html, /id="passwordSteeringRow"/);
   assert.match(html, /name="band" id="modalPassBand"/);
   for (const [, script] of html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)) {
     if (script.trim()) new vm.Script(script);
   }
+  locals.customer.ssid5g = 'Home';
+  const steeringHtml = await ejs.renderFile(viewPath, locals);
+  assert.match(steeringHtml, /id="passwordSeparateRows" style="display:none;"/);
+  assert.match(steeringHtml, /id="passwordSteeringRow" class="wifi-band-row" style="display:flex;"/);
 });

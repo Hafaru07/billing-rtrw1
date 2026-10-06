@@ -2171,7 +2171,7 @@ async function kirimWaPasswordWifi(profile, info) {
       '',
       'Password WiFi Anda sudah diperbarui.',
       '',
-      '📶 *Nama WiFi ' + (info.band === '5G' ? '5 GHz' : '2,4 GHz') + ':* ' + (info.ssid || '-')
+      '📶 *Nama WiFi ' + (info.band === 'both' ? '2,4 + 5 GHz' : (info.band === '5G' ? '5 GHz' : '2,4 GHz')) + ':* ' + (info.ssid || '-')
     ];
     baris.push(
       '🔐 *Password:* ' + info.password,
@@ -2236,7 +2236,7 @@ async function prosesGantiWifi(req, res, jenis) {
   }
 
   const band = jenis === 'password' ? String(req.body?.band || '2.4G') : null;
-  if (band && !['2.4G', '5G'].includes(band)) {
+  if (band && !['2.4G', '5G', 'both'].includes(band)) {
     return balasAksiModem(req, res, 400, { ok: false, status: 'invalid', message: 'Band WiFi tidak valid.' });
   }
   const aksi = band ? jenis + ':' + band : jenis;
@@ -2248,8 +2248,16 @@ async function prosesGantiWifi(req, res, jenis) {
   if (cek.error) return balasAksiModem(req, res, 400, { ok: false, status: 'invalid', message: cek.error });
   const has5g = jenis === 'ssid' && req.body && Object.prototype.hasOwnProperty.call(req.body, 'ssid5g');
   const bandSteering = req.body?.bandSteering === 'on';
+  if (jenis === 'ssid' && bandSteering && !has5g) {
+    return balasAksiModem(req, res, 400, { ok: false, status: 'invalid', message: 'Bandsteering memerlukan nama WiFi 5 GHz.' });
+  }
   const cek5g = has5g ? customerDevice.validateWifiSsid(bandSteering ? cek.value : req.body.ssid5g) : null;
   if (cek5g?.error) return balasAksiModem(req, res, 400, { ok: false, status: 'invalid', message: 'WiFi 5 GHz: ' + cek5g.error });
+  const steering = jenis === 'ssid' && has5g && (bandSteering || cek.value === cek5g.value);
+  const cekSteeringPassword = steering ? customerDevice.validateWifiPassword(req.body?.password) : null;
+  if (cekSteeringPassword?.error) {
+    return balasAksiModem(req, res, 400, { ok: false, status: 'invalid', message: 'Bandsteering memerlukan password baru. ' + cekSteeringPassword.error });
+  }
 
   const kunci = loginId + ':' + aksi;
   aksiModemSedangJalan.add(kunci);
@@ -2267,7 +2275,7 @@ async function prosesGantiWifi(req, res, jenis) {
     for (const token of tokenPerangkatPelanggan(req, loginId, profile)) {
       const r = jenis === 'ssid'
         ? await customerDevice.changeWifiSsid(token, cek.value, actor,
-          has5g ? { ssid5g: cek5g.value, bandSteering } : {})
+          has5g ? { ssid5g: cek5g.value, bandSteering: steering, password: cekSteeringPassword?.value } : {})
         : await customerDevice.changeWifiPassword(token, cek.value, actor, { band });
       if (r.status === 'notfound') continue;
       hasil = r;
@@ -2280,12 +2288,21 @@ async function prosesGantiWifi(req, res, jenis) {
     }
 
     let pesan = hasil.message;
-    if (jenis === 'password' && hasil.ok) {
-      const info = { band, ssid: band === '5G' ? hasil.ssid5g : hasil.ssid, password: cek.value };
+    if ((jenis === 'password' || steering) && hasil.ok) {
+      const info = jenis === 'password'
+        ? { band, ssid: band === '5G' ? hasil.ssid5g : hasil.ssid, password: cek.value }
+        : { band: 'both', ssid: hasil.ssid, password: cekSteeringPassword.value };
       if (hasil.status === 'applied') {
         if (await kirimWaPasswordWifi(profile, info)) pesan += ' Detail password juga sudah dikirim ke WhatsApp Anda.';
       } else {
-        kirimWaSetelahDiterapkan(profile, info, hasil.acs);
+        if (hasil.completion) {
+          hasil.completion.then(status => {
+            if (status === 'done') return kirimWaPasswordWifi(profile, info);
+            logger.warn('[WiFi] Password untuk ' + (profile?.name || '-') + ' belum berhasil diterapkan (' + status + '); WA tidak dikirim.');
+          }).catch(e => logger.warn('[WiFi] Pemantauan password gagal: ' + e.message));
+        } else {
+          kirimWaSetelahDiterapkan(profile, info, hasil.acs);
+        }
         if (waPelangganAktif(profile)) pesan += ' Detail password akan dikirim ke WhatsApp Anda setelah modem menerapkannya.';
       }
     }

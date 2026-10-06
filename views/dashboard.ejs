@@ -928,7 +928,7 @@
         <div class="action-icon ai-ssid"><i class="bi bi-wifi"></i></div>
         <div class="action-label">Nama WiFi</div>
       </div>
-      <div class="action-item" onclick="editPassword('2.4G')">
+      <div class="action-item" onclick="editPassword()">
         <div class="action-icon ai-pass"><i class="bi bi-key-fill"></i></div>
         <div class="action-label">Sandi WiFi</div>
       </div>
@@ -1009,6 +1009,7 @@
               <div class="d-flex align-items-center justify-content-between mb-2">
                 <span class="small fw-bold" style="color:#86efac;"><i class="bi bi-shield-lock text-success me-1"></i> Password WiFi</span>
               </div>
+              <div id="passwordSeparateRows" style="display:<%= customer.hasWifi5g && customer.ssid !== '-' && customer.ssid === customer.ssid5g ? 'none' : 'block' %>;">
               <div class="wifi-band-row">
                 <span class="wifi-band-label">2,4 GHz</span>
                 <span class="small text-white">••••••••</span>
@@ -1019,6 +1020,14 @@
                   <span class="wifi-band-label">5 GHz</span>
                   <span class="small text-white">••••••••</span>
                   <button type="button" class="btn btn-link btn-sm text-success p-0 text-decoration-none fw-bold" onclick="editPassword('5G')">Ubah <i class="bi bi-pencil"></i></button>
+                </div>
+              <% } %>
+              </div>
+              <% if (customer.hasWifi5g) { %>
+                <div id="passwordSteeringRow" class="wifi-band-row" style="display:<%= customer.ssid !== '-' && customer.ssid === customer.ssid5g ? 'flex' : 'none' %>;">
+                  <span class="wifi-band-label" style="flex-basis:auto;">Kedua band</span>
+                  <span class="small text-white">••••••••</span>
+                  <button type="button" class="btn btn-link btn-sm text-success p-0 text-decoration-none fw-bold" onclick="editPassword('both')">Ubah <i class="bi bi-pencil"></i></button>
                 </div>
               <% } %>
             </div>
@@ -1378,7 +1387,12 @@
                 <input class="form-check-input" type="checkbox" role="switch" name="bandSteering" id="bandSteeringToggle">
                 <label class="form-check-label fw-bold" for="bandSteeringToggle">Bandsteering</label>
               </div>
-              <div class="form-text">HP akan beradaptasi untuk mendapatkan sinyal yang lebih baik. Kedua band memakai nama WiFi yang sama; gunakan juga password yang sama pada kedua band.</div>
+              <div class="form-text">HP akan beradaptasi untuk mendapatkan sinyal yang lebih baik. Kedua band memakai nama dan password WiFi yang sama.</div>
+              <div id="steeringPasswordWrap" class="mt-3" hidden>
+                <label for="steeringPasswordInput" class="form-label">Password baru untuk kedua band</label>
+                <input type="password" name="password" id="steeringPasswordInput" class="form-control text-white p-3" minlength="8" maxlength="63" autocomplete="new-password" placeholder="Minimal 8 karakter">
+                <div class="form-text">Masukkan password pilihan Anda. Password lama 2,4 dan 5 GHz mungkin berbeda.</div>
+              </div>
             <% } %>
             <div class="form-text">Perangkat akan terputus sesaat setelah nama WiFi diubah.</div>
             <div id="ssidStatus" class="small fw-bold mt-3" style="display:none;" role="status" aria-live="polite"></div>
@@ -1404,7 +1418,7 @@
           <div class="modal-body p-4">
             <input type="hidden" name="band" id="modalPassBand" value="2.4G">
             <% if (customer.hasWifi5g) { %>
-              <div class="btn-group w-100 mb-3" role="group" aria-label="Pilih band WiFi">
+              <div id="passwordBandChoices" class="btn-group w-100 mb-3" role="group" aria-label="Pilih band WiFi">
                 <button type="button" id="modalPass24Choice" class="btn btn-outline-success active" aria-pressed="true" onclick="selectPasswordBand('2.4G')">2,4 GHz</button>
                 <button type="button" id="modalPass5Choice" class="btn btn-outline-success" aria-pressed="false" onclick="selectPasswordBand('5G')">5 GHz</button>
               </div>
@@ -1643,7 +1657,12 @@
         const main = document.getElementById('ssidDisplay');
         const five = document.getElementById('ssid5gDisplay');
         const steering = document.getElementById('bandsteeringDisplay');
-        if (main && five && steering) steering.textContent = main.textContent.trim() === five.textContent.trim() ? 'Aktif' : 'Nonaktif';
+        if (main && five && steering) {
+          const active = main.textContent.trim() === five.textContent.trim();
+          steering.textContent = active ? 'Aktif' : 'Nonaktif';
+          document.getElementById('passwordSeparateRows').style.display = active ? 'none' : 'block';
+          document.getElementById('passwordSteeringRow').style.display = active ? 'flex' : 'none';
+        }
       }
       if (data.ok && data.status === 'applied') {
         tampilStatusWifi(statusEl, 'sukses', data.message);
@@ -1653,6 +1672,10 @@
         tampilStatusWifi(statusEl, 'gagal', data.message || 'Gagal memproses permintaan.');
       }
       if (jenis === 'password' && data.ok) document.getElementById('modalPassInput').value = '';
+      if (jenis === 'ssid' && data.ok) {
+        const steeringPassword = document.getElementById('steeringPasswordInput');
+        if (steeringPassword) steeringPassword.value = '';
+      }
 
       const jeda = Number(data.retryAfter) || 0;
       if (jeda > 0) {
@@ -1690,6 +1713,7 @@
         input5.dataset.separateName = input5.value;
         toggle.checked = !!input24.value && input24.value === input5.value;
         input5.readOnly = toggle.checked;
+        syncSteeringPassword();
       }
       if (!wifiSibuk.ssid) document.getElementById('ssidStatus').style.display = 'none';
       const m = new bootstrap.Modal(document.getElementById('editSsidModal'));
@@ -1699,6 +1723,16 @@
     const ssid24Input = document.getElementById('modalSsid24Input');
     const ssid5Input = document.getElementById('modalSsid5gInput');
     const bandToggle = document.getElementById('bandSteeringToggle');
+    function syncSteeringPassword() {
+      const wrap = document.getElementById('steeringPasswordWrap');
+      const input = document.getElementById('steeringPasswordInput');
+      if (!wrap || !input) return;
+      const active = !!bandToggle.checked;
+      wrap.hidden = !active;
+      input.required = active;
+      input.disabled = !active;
+      if (!active) input.value = '';
+    }
     if (ssid5Input && bandToggle) {
       ssid24Input.addEventListener('input', function () {
         if (bandToggle.checked) {
@@ -1707,10 +1741,12 @@
           bandToggle.checked = true;
           ssid5Input.readOnly = true;
         }
+        syncSteeringPassword();
       });
       ssid5Input.addEventListener('input', function () {
         bandToggle.checked = !!ssid5Input.value && ssid5Input.value === ssid24Input.value;
         ssid5Input.readOnly = bandToggle.checked;
+        syncSteeringPassword();
       });
       bandToggle.addEventListener('change', function () {
         if (bandToggle.checked) {
@@ -1718,15 +1754,21 @@
           ssid5Input.value = ssid24Input.value;
         } else if (ssid5Input.dataset.separateName && ssid5Input.dataset.separateName !== ssid24Input.value) {
           ssid5Input.value = ssid5Input.dataset.separateName;
+        } else {
+          ssid5Input.value = '';
+          ssid5Input.focus();
         }
         ssid5Input.readOnly = bandToggle.checked;
+        syncSteeringPassword();
       });
     }
 
     function selectPasswordBand(band) {
       if (passwordRequestInFlight) return;
       document.getElementById('modalPassBand').value = band;
-      document.getElementById('modalPassBandLabel').textContent = band === '5G' ? '5 GHz' : '2,4 GHz';
+      document.getElementById('modalPassBandLabel').textContent = band === 'both' ? '(2,4 + 5 GHz)' : (band === '5G' ? '5 GHz' : '2,4 GHz');
+      const choices = document.getElementById('passwordBandChoices');
+      if (choices) choices.style.display = band === 'both' ? 'none' : '';
       document.getElementById('modalPassInput').value = '';
       document.getElementById('passStatus').style.display = 'none';
       for (const [id, value] of [['modalPass24Choice', '2.4G'], ['modalPass5Choice', '5G']]) {
@@ -1739,6 +1781,11 @@
     }
 
     function editPassword(band) {
+      if (!band) {
+        const main = document.getElementById('ssidDisplay');
+        const five = document.getElementById('ssid5gDisplay');
+        band = main && five && main.textContent.trim() === five.textContent.trim() ? 'both' : '2.4G';
+      }
       selectPasswordBand(band);
       const m = new bootstrap.Modal(document.getElementById('editPasswordModal'));
       m.show();
