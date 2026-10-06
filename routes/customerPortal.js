@@ -2149,7 +2149,7 @@ async function kirimWaPasswordWifi(profile, info) {
 
     // Disimpan sebagai hash supaya password tidak tertinggal di memori.
     const kunci = require('crypto').createHash('sha256')
-      .update(profile.phone + '|' + info.ssid + '|' + info.password).digest('hex');
+      .update(profile.phone + '|' + info.band + '|' + info.ssid + '|' + info.password).digest('hex');
     if (Date.now() - (waWifiTerakhir.get(kunci) || 0) < JEDA_WA_WIFI_SAMA_MS) {
       logger.info('[WiFi] WA ganti password untuk ' + label + ' dilewati: pesan yang sama baru saja dikirim.');
       return false;
@@ -2171,9 +2171,8 @@ async function kirimWaPasswordWifi(profile, info) {
       '',
       'Password WiFi Anda sudah diperbarui.',
       '',
-      '📶 *Nama WiFi:* ' + (info.ssid || '-')
+      '📶 *Nama WiFi ' + (info.band === '5G' ? '5 GHz' : '2,4 GHz') + ':* ' + (info.ssid || '-')
     ];
-    if (info.ssid5g && info.ssid5g !== info.ssid) baris.push('📶 *Nama WiFi 5G:* ' + info.ssid5g);
     baris.push(
       '🔐 *Password:* ' + info.password,
       '',
@@ -2236,14 +2235,23 @@ async function prosesGantiWifi(req, res, jenis) {
       : res.redirect('/customer/login');
   }
 
-  const tolak = tolakBilaSibuk(loginId, jenis);
+  const band = jenis === 'password' ? String(req.body?.band || '2.4G') : null;
+  if (band && !['2.4G', '5G'].includes(band)) {
+    return balasAksiModem(req, res, 400, { ok: false, status: 'invalid', message: 'Band WiFi tidak valid.' });
+  }
+  const aksi = band ? jenis + ':' + band : jenis;
+  const tolak = tolakBilaSibuk(loginId, aksi);
   if (tolak) return balasAksiModem(req, res, tolak.kodeHttp, tolak.hasil);
 
-  const mentah = jenis === 'ssid' ? (req.body && req.body.ssid) : (req.body && req.body.password);
+  const mentah = jenis === 'ssid' ? (req.body && (req.body.ssid24 ?? req.body.ssid)) : (req.body && req.body.password);
   const cek = jenis === 'ssid' ? customerDevice.validateWifiSsid(mentah) : customerDevice.validateWifiPassword(mentah);
   if (cek.error) return balasAksiModem(req, res, 400, { ok: false, status: 'invalid', message: cek.error });
+  const has5g = jenis === 'ssid' && req.body && Object.prototype.hasOwnProperty.call(req.body, 'ssid5g');
+  const bandSteering = req.body?.bandSteering === 'on';
+  const cek5g = has5g ? customerDevice.validateWifiSsid(bandSteering ? cek.value : req.body.ssid5g) : null;
+  if (cek5g?.error) return balasAksiModem(req, res, 400, { ok: false, status: 'invalid', message: 'WiFi 5 GHz: ' + cek5g.error });
 
-  const kunci = loginId + ':' + jenis;
+  const kunci = loginId + ':' + aksi;
   aksiModemSedangJalan.add(kunci);
   try {
     const profile = findCustomerProfileByLoginId(loginId);
@@ -2258,18 +2266,22 @@ async function prosesGantiWifi(req, res, jenis) {
     let hasil = { ok: false, status: 'notfound', message: 'Perangkat Anda tidak ditemukan di ACS. Silakan hubungi admin.' };
     for (const token of tokenPerangkatPelanggan(req, loginId, profile)) {
       const r = jenis === 'ssid'
-        ? await customerDevice.changeWifiSsid(token, cek.value, actor)
-        : await customerDevice.changeWifiPassword(token, cek.value, actor);
+        ? await customerDevice.changeWifiSsid(token, cek.value, actor,
+          has5g ? { ssid5g: cek5g.value, bandSteering } : {})
+        : await customerDevice.changeWifiPassword(token, cek.value, actor, { band });
       if (r.status === 'notfound') continue;
       hasil = r;
       break;
     }
 
-    if (hasil.ok) aksiModemTerakhir.set(kunci, Date.now());
+    const adaPerubahan = Object.values(hasil.bands || {}).some(b => b.status === 'applied' || b.status === 'queued');
+    if (adaPerubahan) {
+      aksiModemTerakhir.set(kunci, Date.now());
+    }
 
     let pesan = hasil.message;
     if (jenis === 'password' && hasil.ok) {
-      const info = { ssid: hasil.ssid || '', ssid5g: hasil.ssid5g || '', password: cek.value };
+      const info = { band, ssid: band === '5G' ? hasil.ssid5g : hasil.ssid, password: cek.value };
       if (hasil.status === 'applied') {
         if (await kirimWaPasswordWifi(profile, info)) pesan += ' Detail password juga sudah dikirim ke WhatsApp Anda.';
       } else {
@@ -2278,10 +2290,13 @@ async function prosesGantiWifi(req, res, jenis) {
       }
     }
 
-    const kodeHttp = hasil.ok ? 200 : (hasil.status === 'busy' ? 429 : (hasil.status === 'notfound' ? 404 : 502));
-    const balasan = { ok: hasil.ok, status: hasil.status, message: pesan };
-    if (hasil.ok) balasan.retryAfter = Math.ceil(JEDA_AKSI_MODEM_MS / 1000);
-    if (hasil.ok && jenis === 'ssid') balasan.ssid = cek.value;
+    const kodeHttp = hasil.ok ? 200 : (hasil.status === 'busy' ? 429 : (hasil.status === 'notfound' ? 404 : (hasil.status === 'invalid' || hasil.status === 'unsupported' ? 400 : 502)));
+    const balasan = { ok: hasil.ok, status: hasil.status, message: pesan, bands: hasil.bands || {} };
+    if (adaPerubahan) balasan.retryAfter = Math.ceil(JEDA_AKSI_MODEM_MS / 1000);
+    if (jenis === 'ssid') {
+      balasan.ssid = hasil.ssid || cek.value;
+      balasan.ssid5g = hasil.ssid5g || '';
+    }
     return balasAksiModem(req, res, kodeHttp, balasan);
   } finally {
     aksiModemSedangJalan.delete(kunci);

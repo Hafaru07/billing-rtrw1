@@ -9,6 +9,7 @@ const auditTrail = require('./auditTrailService');
 const { logger } = require('../config/logger');
 const genieacsApi = require('../config/genieacs');
 const mikrotikService = require('./mikrotikService');
+const { targetWifi } = require('./wifiBands');
 
 // Helper: Search device across all servers (always get full data)
 async function searchDeviceAcrossServers(query, fullData = true) {
@@ -685,6 +686,9 @@ function mapDeviceData(device, tag, isPppoeActive = false) {
 
   const ssid = getParameterWithPaths(device, parameterPaths.ssid);
   const ssidDisplay = ssid === 'N/A' ? '-' : ssid;
+  const wifiBands = targetWifi(device).bands;
+  const wifi24 = wifiBands.find(band => band.band === '2.4G');
+  const wifi5 = wifiBands.find(band => band.band === '5G' && band.ssidPath);
 
   const lastInformRaw =
     device?._lastInform ||
@@ -851,7 +855,9 @@ function mapDeviceData(device, tag, isPppoeActive = false) {
 
   return {
     phone: tag,
-    ssid: ssidDisplay,
+    ssid: (wifi24 && wifi24.ssidValue) || ssidDisplay,
+    ssid5g: (wifi5 && wifi5.ssidValue) || '-',
+    hasWifi5g: !!wifi5,
     status,
     lastInform,
     lastInformRaw: lastInformRaw || '',
@@ -902,6 +908,8 @@ function fallbackCustomer(tag) {
   return {
     phone: tag,
     ssid: '-',
+    ssid5g: '-',
+    hasWifi5g: false,
     status: 'Tidak ditemukan',
     lastInform: '-',
     lastInformAgo: '-',
@@ -926,117 +934,18 @@ function fallbackCustomer(tag) {
   };
 }
 
-// ─── Ganti SSID / password WiFi ──────────────────────────────────────────────
-// Dipetakan dari GenieACS produksi (226 ONU: Huawei HG8145V5/HG8245W5-6T,
-// FiberHome HG6145D2, Nokia G-2425G-A, ZTE F670L, ZTE-CMCC F663NV3A). Semuanya
-// memakai model TR-098; 2.4 GHz utama ada di WLANConfiguration.1 dan 5 GHz
-// utama di WLANConfiguration.5. Indeks lain adalah SSID sekunder/tamu dan
-// sengaja tidak disentuh.
-//
-// setParameterValues bersifat atomik: satu path yang tidak dikenal ONU (fault
-// 9005) atau nilai yang ditolak (9007) membatalkan seluruh perintah. Karena itu
-// path diambil dari pohon parameter ONU itu sendiri, dan password dicoba satu
-// leaf per percobaan dengan urutan yang benar untuk vendornya.
-const WLAN_ROOT = 'InternetGatewayDevice.LANDevice.1.WLANConfiguration';
-
-// Huawei menolak KeyPassphrase level atas (fault 9007, forum GenieACS #1478 dan
-// #4685) dan menyimpan passphrase di PreSharedKey.1.KeyPassphrase; Nokia dan
-// FiberHome juga mengisi leaf itu. ZTE memakai KeyPassphrase.
-// PreSharedKey.1.PreSharedKey paling akhir karena banyak ONU mengharapkan 64
-// digit hex di sana, bukan passphrase biasa.
-// Parameter X_HW_WPSKeyWord / X_CMCC_WPSKeyWord adalah kunci WPS, bukan
-// password WiFi, jadi tidak dipakai.
-const LEAF_PSK_DULU = ['PreSharedKey.1.KeyPassphrase', 'KeyPassphrase', 'PreSharedKey.1.PreSharedKey'];
-const LEAF_KEY_DULU = ['KeyPassphrase', 'PreSharedKey.1.KeyPassphrase', 'PreSharedKey.1.PreSharedKey'];
-const URUTAN_LEAF_PASSWORD = {
-  huawei: LEAF_PSK_DULU,
-  nokia: LEAF_PSK_DULU,
-  fiberhome: LEAF_PSK_DULU,
-  'zte-cmcc': LEAF_KEY_DULU,
-  zte: LEAF_KEY_DULU,
-  lainnya: LEAF_KEY_DULU
-};
-
-// Fault yang berarti "path/nilai ini tidak cocok untuk ONU ini", sehingga aman
-// dicoba lagi dengan leaf berikutnya.
+// A rejected parameter must not prevent the other radio from being updated.
 const FAULT_COBA_LEAF_LAIN = /900[357]/;
 
 // Hanya satu perubahan WiFi per perangkat dalam satu waktu.
 const wifiSedangDiproses = new Map(); // deviceId -> waktu mulai (ms)
 const BATAS_KUNCI_WIFI_MS = 3 * 60 * 1000;
 
-function ambilNodeWifi(obj, jalur) {
-  let cur = obj;
-  for (const k of String(jalur).split('.')) {
-    if (!cur || typeof cur !== 'object') return null;
-    cur = cur[k];
-  }
-  return cur && typeof cur === 'object' ? cur : null;
-}
-
-function leafBisaDitulis(doc, jalur) {
-  const node = ambilNodeWifi(doc, jalur);
-  return !!node && node._writable !== false;
-}
-
-function nilaiLeafWifi(doc, jalur) {
-  const node = ambilNodeWifi(doc, jalur);
-  return node && node._value !== undefined && node._value !== null ? String(node._value) : '';
-}
-
-function deteksiVendorWifi(doc) {
-  const d = (doc && doc._deviceId) || {};
-  const kunciWlan1 = Object.keys(ambilNodeWifi(doc, WLAN_ROOT + '.1') || {});
-  if (kunciWlan1.some(k => k.startsWith('X_CMCC_'))) return 'zte-cmcc';
-  const teks = [d._Manufacturer, d._OUI, d._ProductClass].join(' ').toUpperCase();
-  if (/HUAWEI|HWTC/.test(teks) || kunciWlan1.some(k => k.startsWith('X_HW_'))) return 'huawei';
-  if (/FIBERHOME|FHTT/.test(teks)) return 'fiberhome';
-  if (/NOKIA|ALCL|ALCATEL/.test(teks) || kunciWlan1.some(k => k.startsWith('X_ALU'))) return 'nokia';
-  if (/ZTE/.test(teks)) return 'zte';
-  return 'lainnya';
-}
-
-// SSID dan kandidat leaf password untuk WiFi utama 2.4 GHz dan (bila ada) 5 GHz.
-function targetWifi(doc) {
-  const vendor = deteksiVendorWifi(doc);
-  const urutan = URUTAN_LEAF_PASSWORD[vendor] || URUTAN_LEAF_PASSWORD.lainnya;
-  const target = [];
-
-  for (const [pita, idx] of [['2.4G', '1'], ['5G', '5']]) {
-    const base = WLAN_ROOT + '.' + idx;
-    if (!ambilNodeWifi(doc, base)) continue;
-    target.push({
-      pita,
-      nilaiSsid: nilaiLeafWifi(doc, base + '.SSID'),
-      ssid: leafBisaDitulis(doc, base + '.SSID') ? base + '.SSID' : null,
-      password: urutan.map(leaf => base + '.' + leaf).filter(p => leafBisaDitulis(doc, p))
-    });
-  }
-
-  // Cadangan untuk ONU bermodel TR-181 (tidak ada di jaringan saat ini).
-  if (!target.length) {
-    for (const [pita, idx] of [['2.4G', '1'], ['5G', '2']]) {
-      if (!ambilNodeWifi(doc, 'Device.WiFi.SSID.' + idx)) continue;
-      const jalurSsid = 'Device.WiFi.SSID.' + idx + '.SSID';
-      target.push({
-        pita,
-        nilaiSsid: nilaiLeafWifi(doc, jalurSsid),
-        ssid: leafBisaDitulis(doc, jalurSsid) ? jalurSsid : null,
-        password: ['KeyPassphrase', 'PreSharedKey']
-          .map(leaf => 'Device.WiFi.AccessPoint.' + idx + '.Security.' + leaf)
-          .filter(p => leafBisaDitulis(doc, p))
-      });
-    }
-  }
-
-  return { vendor, target };
-}
-
 async function ambilPohonWifi(instance, deviceId) {
   const res = await instance.get('/devices/', {
     params: {
       query: JSON.stringify({ _id: deviceId }),
-      projection: '_id,_deviceId,' + WLAN_ROOT + ',Device.WiFi.SSID,Device.WiFi.AccessPoint'
+      projection: '_id,_deviceId,InternetGatewayDevice.LANDevice.1.WLANConfiguration,Device.WiFi.SSID,Device.WiFi.AccessPoint'
     },
     timeout: 20000
   });
@@ -1076,7 +985,7 @@ async function bersihkanTaskWifiGagal(instance, deviceId) {
 // request) supaya dieksekusi sekarang, bukan menunggu inform berkala.
 // Hasil: 'applied' (HTTP 200, ONU sudah menerapkan), 'queued' (202, ONU belum
 // merespons dan akan menerapkan saat tersambung), 'fault', atau 'error'.
-async function kirimSetParameter(instance, deviceId, parameterValues) {
+async function kirimSetParameter(instance, deviceId, parameterValues, serverId) {
   const url = '/devices/' + encodeURIComponent(deviceId) + '/tasks';
   let res;
   try {
@@ -1097,20 +1006,36 @@ async function kirimSetParameter(instance, deviceId, parameterValues) {
 
   // 202 bisa berarti ONU belum merespons, atau ONU menolak perintah (fault).
   if (!taskId) return { hasil: 'queued', taskId };
+  if (serverId === 'builtin') {
+    const deadline = Date.now() + 4000;
+    do {
+      const task = db.prepare('SELECT status, result FROM acs_tasks WHERE id = ? AND device_id = ?').get(taskId, deviceId);
+      if (task?.status === 'completed') return { hasil: 'applied', taskId };
+      if (task?.status === 'failed') {
+        let fault = {};
+        try { fault = JSON.parse(task.result || '{}'); } catch (_) {}
+        return { hasil: 'fault', kode: String(fault.faultCode || fault.code || ''), pesan: String(fault.faultString || fault.message || '') };
+      }
+      await new Promise(resolve => setTimeout(resolve, 400));
+    } while (Date.now() < deadline);
+    return { hasil: 'queued', taskId };
+  }
+
   try {
-    const f = await instance.get('/faults/', {
-      params: { query: JSON.stringify({ device: deviceId }) },
-      timeout: 15000,
-      validateStatus: () => true
-    });
-    const daftar = Array.isArray(f && f.data) ? f.data : [];
-    const fault = daftar.find(x => String(x._id || '') === deviceId + ':task_' + taskId);
-    if (fault) {
-      // Hapus task & fault milik permintaan ini sendiri supaya tidak diulang
-      // terus oleh GenieACS.
-      await instance.delete('/tasks/' + encodeURIComponent(taskId), { timeout: 10000, validateStatus: () => true });
-      await instance.delete('/faults/' + encodeURIComponent(fault._id), { timeout: 10000, validateStatus: () => true });
-      return { hasil: 'fault', kode: String(fault.code || ''), pesan: String(fault.message || '') };
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const f = await instance.get('/faults/', {
+        params: { query: JSON.stringify({ device: deviceId }) },
+        timeout: 15000,
+        validateStatus: () => true
+      });
+      const daftar = Array.isArray(f && f.data) ? f.data : [];
+      const fault = daftar.find(x => String(x._id || '') === deviceId + ':task_' + taskId);
+      if (fault) {
+        await instance.delete('/tasks/' + encodeURIComponent(taskId), { timeout: 10000, validateStatus: () => true });
+        await instance.delete('/faults/' + encodeURIComponent(fault._id), { timeout: 10000, validateStatus: () => true });
+        return { hasil: 'fault', kode: String(fault.code || ''), pesan: String(fault.message || '') };
+      }
+      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 600));
     }
   } catch (e) {
     // Fault tidak terbaca: anggap masih antre.
@@ -1135,7 +1060,7 @@ function validateWifiPassword(password) {
   return { value: p };
 }
 
-async function ubahWifi(tag, jenis, nilai, actor) {
+async function ubahWifi(tag, jenis, nilaiPerBand, actor, wajib5g = false) {
   const device = await resolveDeviceToken(tag);
   if (!device || !device._id) {
     return { ok: false, status: 'notfound', message: 'Perangkat tidak ditemukan di ACS.' };
@@ -1165,105 +1090,117 @@ async function ubahWifi(tag, jenis, nilai, actor) {
       return { ok: false, status: 'failed', message: 'Data WiFi modem belum terbaca di ACS. Tekan "Poll ONU Sekarang", tunggu sebentar, lalu coba lagi.' };
     }
 
-    const { vendor, target } = targetWifi(doc);
-    const percobaan = [];
-
-    if (jenis === 'ssid') {
-      const nama5g = (Buffer.byteLength(nilai, 'utf8') > 29 ? nilai.slice(0, 29) : nilai) + '-5G';
-      const semua = target.filter(t => t.ssid)
-        .map(t => [t.ssid, t.pita === '5G' ? nama5g : nilai, 'xsd:string']);
-      if (semua.length) percobaan.push(semua);
-      // Kalau SSID 5 GHz ditolak, setidaknya 2.4 GHz tetap berubah.
-      const utama = target.find(t => t.pita === '2.4G' && t.ssid);
-      if (utama && semua.length > 1) percobaan.push([[utama.ssid, nilai, 'xsd:string']]);
-    } else {
-      const maks = Math.max(0, ...target.map(t => t.password.length));
-      for (let k = 0; k < maks; k++) {
-        const pv = target.filter(t => t.password[k]).map(t => [t.password[k], nilai, 'xsd:string']);
-        if (pv.length) percobaan.push(pv);
-      }
+    const { vendor, bands } = targetWifi(doc);
+    const requested = Object.entries(nilaiPerBand).filter(([, value]) => value !== undefined);
+    const missing = requested.find(([band]) => !bands.some(target => target.band === band));
+    if (missing && (missing[0] !== '5G' || wajib5g)) {
+      return { ok: false, status: 'unsupported', vendor, message: 'WiFi ' + missing[0] + ' tidak tersedia pada modem ini.' };
     }
 
-    if (!percobaan.length) {
-      return { ok: false, status: 'failed', vendor, message: 'Modem ini tidak menyediakan parameter WiFi yang bisa diubah lewat ACS. Hubungi admin.' };
+    const selected = requested.filter(([band]) => {
+      const target = bands.find(item => item.band === band);
+      if (!target) return false;
+      if (band === '5G' && !wajib5g) {
+        return jenis === 'ssid' ? !!target.ssidPath : target.passwordPaths.length > 0;
+      }
+      return true;
+    });
+    const unwritable = selected.find(([band]) => {
+      const target = bands.find(item => item.band === band);
+      return jenis === 'ssid' ? !target.ssidPath : !target.passwordPaths.length;
+    });
+    if (unwritable) {
+      return { ok: false, status: 'unsupported', vendor, message: 'Pengaturan WiFi ' + unwritable[0] + ' tidak dapat diubah lewat ACS pada modem ini.' };
     }
 
     await bersihkanTaskWifiGagal(instance, deviceId);
-
-    let terakhir = null;
-    for (const pv of percobaan) {
-      const jalur = pv.map(x => x[0]);
-      const r = await kirimSetParameter(instance, deviceId, pv);
-      terakhir = r;
-
-      if (r.hasil === 'applied' || r.hasil === 'queued') {
-        logger.info('[WiFi] ' + jenis + ' ' + r.hasil + ' di ' + deviceId + ' (' + vendor + ') lewat ' + jalur.join(', '));
-        if (actor) {
-          auditTrail.logAuditTrail({
-            action: jenis === 'ssid' ? 'UPDATE_SSID' : 'UPDATE_PASSWORD',
-            entity_type: 'device',
-            entity_id: tag,
-            actor_type: actor.type || 'unknown',
-            actor_id: actor.id || null,
-            actor_name: actor.name || null,
-            details: jenis === 'ssid'
-              ? { newSSID: nilai, status: r.hasil, vendor, paths: jalur }
-              : { status: r.hasil, vendor, paths: jalur },
-            ip_address: actor.ip || null,
-            user_agent: actor.userAgent || null
-          });
-        }
-
-        const pesan = jenis === 'ssid'
-          ? (r.hasil === 'applied'
-            ? 'Nama WiFi berhasil diubah menjadi "' + nilai + '" dan sudah diterapkan di modem. Sambungkan ulang perangkat Anda ke nama WiFi baru.'
-            : 'Perintah sudah dikirim, tetapi modem belum merespons ACS. Nama WiFi akan berubah otomatis begitu modem tersambung.')
-          : (r.hasil === 'applied'
-            ? 'Password WiFi berhasil diubah dan sudah diterapkan di modem. Sambungkan ulang perangkat Anda memakai password baru.'
-            : 'Perintah sudah dikirim, tetapi modem belum merespons ACS. Password akan berubah otomatis begitu modem tersambung.');
-        const utama24 = target.find(t => t.pita === '2.4G');
-        const utama5 = target.find(t => t.pita === '5G');
-        return {
-          ok: true,
-          status: r.hasil,
-          vendor,
-          paths: jalur,
-          message: pesan,
-          // Nama WiFi saat ini, dipakai notifikasi WhatsApp ganti password.
-          ssid: jenis === 'ssid' ? nilai : ((utama24 && utama24.nilaiSsid) || ''),
-          ssid5g: jenis === 'ssid' ? '' : ((utama5 && utama5.nilaiSsid) || ''),
-          // Untuk memeriksa belakangan apakah perintah yang antre sudah dijalankan.
-          acs: { serverId: server.id, deviceId, taskId: r.taskId || '' }
-        };
+    const hasilBand = {};
+    for (const [band, value] of selected) {
+      const target = bands.find(item => item.band === band);
+      if (jenis === 'ssid' && target.ssidValue === value) {
+        hasilBand[band] = { status: 'unchanged', ssid: value };
+        continue;
       }
 
-      logger.warn('[WiFi] ' + jenis + ' ditolak ' + deviceId + ' (' + vendor + ') lewat ' + jalur.join(', ') +
-        ': ' + (r.kode || '') + ' ' + (r.pesan || ''));
-      if (r.hasil === 'fault' && FAULT_COBA_LEAF_LAIN.test(r.kode)) continue;
-      break;
+      const paths = jenis === 'ssid' ? [target.ssidPath] : target.passwordPaths;
+      let last = null;
+      for (const path of paths) {
+        const result = await kirimSetParameter(instance, deviceId, [[path, value, 'xsd:string']], server.id);
+        last = result;
+        if (result.hasil === 'applied' || result.hasil === 'queued') {
+          hasilBand[band] = {
+            status: result.hasil,
+            ssid: jenis === 'ssid' ? value : target.ssidValue,
+            acs: { serverId: server.id, deviceId, taskId: result.taskId || '' }
+          };
+          logger.info('[WiFi] ' + jenis + ' ' + band + ' ' + result.hasil + ' di ' + deviceId + ' (' + vendor + ') lewat ' + path);
+          if (actor) {
+            auditTrail.logAuditTrail({
+              action: jenis === 'ssid' ? 'UPDATE_SSID' : 'UPDATE_PASSWORD',
+              entity_type: 'device', entity_id: tag,
+              actor_type: actor.type || 'unknown', actor_id: actor.id || null,
+              actor_name: actor.name || null,
+              details: jenis === 'ssid'
+                ? { band, newSSID: value, status: result.hasil, vendor, path }
+                : { band, status: result.hasil, vendor, path },
+              ip_address: actor.ip || null, user_agent: actor.userAgent || null
+            });
+          }
+          break;
+        }
+        logger.warn('[WiFi] ' + jenis + ' ' + band + ' ditolak ' + deviceId + ' (' + vendor + ') lewat ' + path +
+          ': ' + (result.kode || '') + ' ' + (result.pesan || ''));
+        if (result.hasil !== 'fault' || !FAULT_COBA_LEAF_LAIN.test(result.kode)) break;
+      }
+      if (!hasilBand[band]) hasilBand[band] = { status: 'failed', code: last?.kode || '' };
     }
 
+    const entries = Object.entries(hasilBand);
+    const failed = entries.filter(([, result]) => result.status === 'failed');
+    const changed = entries.filter(([, result]) => result.status === 'applied' || result.status === 'queued');
+    const queued = changed.some(([, result]) => result.status === 'queued');
+    const label = jenis === 'ssid' ? 'Nama WiFi' : 'Password WiFi';
+    const bandNames = changed.map(([band]) => band === '2.4G' ? '2,4 GHz' : '5 GHz').join(' dan ');
+    const status = failed.length ? (changed.length ? 'partial' : 'failed') : (queued ? 'queued' : 'applied');
+    const message = failed.length
+      ? label + ' ' + failed.map(([band]) => band === '2.4G' ? '2,4 GHz' : '5 GHz').join(' dan ') +
+        ' ditolak modem' + (failed[0][1].code ? ' (kode ' + failed[0][1].code + ')' : '') +
+        (changed.length ? '. Perubahan ' + bandNames + ' berhasil dikirim.' : '. Hubungi admin.')
+      : changed.length
+        ? label + ' ' + bandNames + (queued
+          ? ' sudah dikirim ke ACS dan akan diterapkan saat modem tersambung.'
+          : ' berhasil diterapkan. Sambungkan ulang perangkat Anda.')
+        : 'Nama WiFi sudah sesuai dengan pengaturan saat ini.';
+    const firstTask = changed.find(([, result]) => result.acs)?.[1].acs || null;
     return {
-      ok: false,
-      status: 'failed',
-      vendor,
-      message: 'Modem menolak perubahan' + (terakhir && terakhir.kode ? ' (kode ' + terakhir.kode + ')' : '') + '. Silakan hubungi admin.'
+      ok: !failed.length, status, vendor, bands: hasilBand, message,
+      ssid: hasilBand['2.4G']?.ssid || bands.find(item => item.band === '2.4G')?.ssidValue || '',
+      ssid5g: hasilBand['5G']?.ssid || bands.find(item => item.band === '5G')?.ssidValue || '',
+      acs: firstTask
     };
   } finally {
     wifiSedangDiproses.delete(deviceId);
   }
 }
 
-async function changeWifiSsid(tag, ssid, actor = null) {
+async function changeWifiSsid(tag, ssid, actor = null, options = {}) {
   const cek = validateWifiSsid(ssid);
   if (cek.error) return { ok: false, status: 'invalid', message: cek.error };
-  return ubahWifi(tag, 'ssid', cek.value, actor);
+  const has5g = Object.prototype.hasOwnProperty.call(options, 'ssid5g');
+  const cek5g = has5g ? validateWifiSsid(options.bandSteering ? cek.value : options.ssid5g) : { value: cek.value };
+  if (cek5g.error) return { ok: false, status: 'invalid', message: 'WiFi 5 GHz: ' + cek5g.error };
+  return ubahWifi(tag, 'ssid', { '2.4G': cek.value, '5G': cek5g.value }, actor, has5g);
 }
 
-async function changeWifiPassword(tag, password, actor = null) {
+async function changeWifiPassword(tag, password, actor = null, options = {}) {
   const cek = validateWifiPassword(password);
   if (cek.error) return { ok: false, status: 'invalid', message: cek.error };
-  return ubahWifi(tag, 'password', cek.value, actor);
+  const band = options.band || null;
+  if (band && band !== '2.4G' && band !== '5G') {
+    return { ok: false, status: 'invalid', message: 'Band WiFi tidak valid.' };
+  }
+  const values = band ? { [band]: cek.value } : { '2.4G': cek.value, '5G': cek.value };
+  return ubahWifi(tag, 'password', values, actor, band === '5G');
 }
 
 // Dipertahankan untuk pemanggil lama (admin, teknisi, API aplikasi) yang hanya
@@ -1512,8 +1449,12 @@ async function requestReboot(tag, actor = null) {
 // 'pending' (masih antre), 'fault' (ditolak modem), atau 'unknown'.
 async function statusTaskAcs(acs) {
   if (!acs || !acs.deviceId || !acs.taskId) return 'unknown';
-  // ACS bawaan tidak menyediakan /tasks & /faults lewat API ini.
-  if (acs.serverId === 'builtin') return 'unknown';
+  if (acs.serverId === 'builtin') {
+    const row = db.prepare('SELECT status FROM acs_tasks WHERE id = ? AND device_id = ?').get(acs.taskId, acs.deviceId);
+    if (row?.status === 'completed') return 'done';
+    if (row?.status === 'failed') return 'fault';
+    return row ? 'pending' : 'unknown';
+  }
   const server = genieacsApi.getACSServer(acs.serverId || 'legacy');
   if (!server) return 'unknown';
   const instance = genieacsApi.createAxiosInstance(server);
