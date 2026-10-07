@@ -9,6 +9,9 @@ const db = require('../config/database');
 const { getSetting, getSettingsWithCache } = require('../config/settingsManager');
 const { logger } = require('../config/logger');
 const customerSvc = require('../services/customerService');
+const { createCustomerPortalAuth } = require('../services/customerPortalAuth');
+const { loginRateLimiter } = require('../middleware/rateLimiter');
+const customerPortalAuth = createCustomerPortalAuth(db);
 const customerDevice = require('../services/customerDeviceService');
 const billingSvc = require('../services/billingService');
 const paymentSvc = require('../services/paymentService');
@@ -53,6 +56,7 @@ function generateApiToken(payloadData) {
 function generateCustomerToken(customer) {
   return generateApiToken({
     customerId: customer.id,
+    authVersion: customerPortalAuth.getAuthVersion(customer.id),
     phone: customer.phone,
     name: customer.name,
     username: customer.pppoe_username || customer.id,
@@ -105,6 +109,10 @@ function requireCustomerApiAuth(req, res, next) {
       success: false,
       message: 'Token tidak valid untuk akun pelanggan.'
     });
+  }
+
+  if (!payload.authVersion || payload.authVersion !== customerPortalAuth.getAuthVersion(Number(custId))) {
+    return res.status(401).json({ success: false, message: 'Sesi pelanggan berakhir. Silakan login kembali.' });
   }
 
   const customer = customerSvc.getCustomerById(Number(custId));
@@ -3343,7 +3351,7 @@ router.get('/config', (req, res) => {
 });
 
 // ─── 2. AUTENTIKASI MULTI-ROLE (ADMIN, AGENT, KOLEKTOR, TEKNISI, PELANGGAN) ──
-router.post('/auth/login', (req, res) => {
+router.post('/auth/login', loginRateLimiter, (req, res) => {
   const { loginId, username, password } = req.body;
   const inputUser = String(loginId || username || '').trim();
   const inputPass = String(password || '').trim();
@@ -3435,42 +3443,14 @@ router.post('/auth/login', (req, res) => {
   } catch (_) {}
 
   // 6. Check Customer Account
-  const cleanDigits = inputUser.replace(/\D/g, '');
-  const allCustomers = customerSvc.getAllCustomers();
-  const customer = allCustomers.find((c) => {
-    const cleanPhone = String(c.phone || '').replace(/\D/g, '');
-    return (
-      (cleanDigits && cleanPhone && cleanPhone.endsWith(cleanDigits.slice(-8))) ||
-      c.phone === inputUser ||
-      c.genieacs_tag === inputUser ||
-      c.pppoe_username === inputUser ||
-      String(c.id) === inputUser
-    );
-  });
+  const authenticated = customerPortalAuth.authenticate(inputUser, inputPass);
+  const customer = authenticated ? customerSvc.getCustomerById(authenticated.id) : null;
 
   if (customer) {
-    let passMatched = false;
-    if (customer.pppoe_password && inputPass === String(customer.pppoe_password).trim()) {
-      passMatched = true;
-    }
-    const phoneDigits = String(customer.phone || '').slice(-4);
-    if (phoneDigits && inputPass === phoneDigits) {
-      passMatched = true;
-    }
-    if (!customer.pppoe_password && inputPass === '123456') {
-      passMatched = true;
-    }
-
-    if (!passMatched) {
-      return res.status(401).json({
-        success: false,
-        message: 'Password / PIN yang Anda masukkan salah.'
-      });
-    }
-
     const token = generateApiToken({
       id: customer.id,
       customerId: customer.id,
+      authVersion: authenticated.authVersion,
       phone: customer.phone,
       name: customer.name,
       username: customer.pppoe_username || customer.id,
@@ -3680,11 +3660,6 @@ router.post('/wifi/change-password', requireCustomerApiAuth, async (req, res) =>
   }
   const customer = req.customer;
   const newPass = newPassword.trim();
-
-  // Simpan ke DB customer
-  try {
-    db.prepare('UPDATE customers SET pppoe_password = ? WHERE id = ?').run(newPass, customer.id);
-  } catch (_) {}
 
   // Kirim ke GenieACS TR-069
   const tokens = [customer.pppoe_username, customer.genieacs_tag, customer.phone, String(customer.id)].filter(Boolean);

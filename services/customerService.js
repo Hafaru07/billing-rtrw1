@@ -4,6 +4,7 @@
 const db = require('../config/database');
 const { logger } = require('../config/logger');
 const { getCurrentDateInTimezone, getSetting } = require('../config/settingsManager');
+const { normalizePhone } = require('./customerPortalAuth');
 
 // ─── HELPER FUNCTIONS ─────────────────────────────────────────
 /**
@@ -83,6 +84,7 @@ function getAllCustomers(search = '', routerId = null, filterStatus = '', filter
            odp.name as odp_name,
            col.name as collector_name,
            col.username as collector_username,
+           EXISTS(SELECT 1 FROM customer_portal_credentials pc WHERE pc.customer_id = c.id) as has_portal_password,
            (SELECT COUNT(*) FROM invoices WHERE customer_id=c.id AND status='unpaid') as unpaid_count,
            u.bytes_in, u.bytes_out
     FROM customers c
@@ -549,13 +551,18 @@ function findCustomerByAny(val) {
   if (!val) return null;
   const cleanVal = val.toString().trim();
   
-  // 1. Try Phone (Priority for Login)
+  // 1. Full phone numbers must resolve to one exact account after normalization.
   const phoneDigits = cleanVal.replace(/\D/g, '');
-  if (phoneDigits.length >= 8) {
-    // Cari yang 8-10 digit terakhirnya sama (lebih akurat untuk 08 vs 62)
+  const normalizedPhone = normalizePhone(cleanVal);
+  if (normalizedPhone) {
+    const matches = db.prepare('SELECT id, phone FROM customers WHERE phone IS NOT NULL AND phone != \'\'')
+      .all().filter(row => normalizePhone(row.phone) === normalizedPhone);
+    if (matches.length > 1) return null;
+    if (matches.length === 1) return getCustomerById(matches[0].id);
+  } else if (phoneDigits.length >= 8) {
     const suffix = phoneDigits.slice(-9);
-    const p1 = db.prepare('SELECT id FROM customers WHERE phone LIKE ?').get(`%${suffix}`);
-    if (p1) return getCustomerById(p1.id);
+    const matches = db.prepare('SELECT id FROM customers WHERE phone LIKE ?').all(`%${suffix}`);
+    if (matches.length === 1) return getCustomerById(matches[0].id);
   }
 
   // 2. Try GenieACS Tag (Exact Match)

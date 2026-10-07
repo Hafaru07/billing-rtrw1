@@ -6,12 +6,14 @@ const billingSvc = require('../services/billingService');
 const pdfSvc = require('../services/pdfInvoiceService');
 const paymentSvc = require('../services/paymentService');
 const customerSvc = require('../services/customerService');
+const { createCustomerPortalAuth } = require('../services/customerPortalAuth');
 const mikrotikService = require('../services/mikrotikService');
 const { parseMikhmonOnLogin } = require('../utils/mikhmonParser');
 const { logger } = require('../config/logger');
 const ticketSvc = require('../services/ticketService');
 const crypto = require('crypto');
 const db = require('../config/database');
+const customerPortalAuth = createCustomerPortalAuth(db);
 const sidebarMenuSvc = require('../services/sidebarMenuService');
 const multer = require('multer');
 const path = require('path');
@@ -1589,16 +1591,24 @@ router.post('/register', async (req, res) => {
 });
 
 router.post('/login', loginRateLimiter, async (req, res) => {
-  const { phone } = req.body;
+  const { phone, password } = req.body;
   const settings = getSettingsWithCache();
+  const authenticated = customerPortalAuth.authenticate(phone, password);
+  if (!authenticated) {
+    const packages = customerSvc.getAllPackages().filter(p => p.is_active !== 0);
+    return res.status(401).render('login', {
+      error: 'Nomor WhatsApp atau password salah. Hubungi admin jika belum memiliki password portal.',
+      settings, packages
+    });
+  }
   const startTime = Date.now();
 
   let device = null;
   let pppoeUsername = null;
-  let customerPhone = phone;
+  let customerPhone = authenticated.phone;
 
   // 1. Tahap 1: Cari Data di Billing DB
-  const customer = customerSvc.findCustomerByAny(phone);
+  const customer = customerSvc.getCustomerById(authenticated.id);
   
   if (customer) {
     logger.info(`[Login] Pelanggan ditemukan di DB (customerId=${customer.id || '-'}, pppoe=${customer.pppoe_username || '-'}).`);
@@ -1687,6 +1697,8 @@ router.post('/login', loginRateLimiter, async (req, res) => {
     req.session.pending_login = {
       phone: customerPhone,
       pppoeUsername: pppoeUsername,
+      customerId: authenticated.id,
+      authVersion: authenticated.authVersion,
       otp: otp,
       expiry: expiry
     };
@@ -1724,6 +1736,8 @@ router.post('/login', loginRateLimiter, async (req, res) => {
   logger.info('[Login] Login direct berhasil.');
   req.session.phone = customerPhone; // Nomor telepon untuk findCustomerByAny()
   req.session.pppoe_username = pppoeUsername; // PPPoE username untuk GenieACS & MikroTik
+  req.session.customerId = authenticated.id;
+  req.session.portalAuthVersion = authenticated.authVersion;
   if (customer && customer.status === 'suspended') {
     return res.redirect('/isolated');
   }
@@ -1753,6 +1767,8 @@ router.post('/login-otp', loginRateLimiter, (req, res) => {
     logger.info('[Login] OTP berhasil diverifikasi.');
     req.session.phone = pending.phone; // Nomor telepon customer
     req.session.pppoe_username = pending.pppoeUsername; // PPPoE username untuk GenieACS & MikroTik
+    req.session.customerId = pending.customerId;
+    req.session.portalAuthVersion = pending.authVersion;
     delete req.session.pending_login;
     const custAfterOtp = customerSvc.findCustomerByAny(pending.phone);
     if (custAfterOtp && custAfterOtp.status === 'suspended') {
@@ -1770,6 +1786,11 @@ router.use((req, res, next) => {
   res.locals.settings = getSettingsWithCache();
   res.locals.formatDateLocal = formatDateLocal;
   res.locals.getNowLocal = getNowLocal;
+
+  if (req.session?.phone && (!req.session.customerId ||
+      req.session.portalAuthVersion !== customerPortalAuth.getAuthVersion(req.session.customerId))) {
+    return req.session.destroy(() => res.redirect('/customer/login'));
+  }
 
   if (isSuspendedPortalExemptPath(req.path)) return next();
   const loginId = req.session && req.session.phone;
@@ -2456,11 +2477,9 @@ router.post('/change-tag', async (req, res) => {
   }
   const tagResult = await updateCustomerTag(oldTag, newTag);
   let notif = null;
-  let resolvedPhone = oldTag;
+  const resolvedPhone = oldTag;
   
   if (tagResult.ok) {
-    req.session.phone = newTag;
-    resolvedPhone = newTag;
     notif = dashboardNotif('ID/Tag berhasil diubah.', 'success');
     
     // UPDATE DATABASE SQLITE IF MATCHING PROFILE FOUND

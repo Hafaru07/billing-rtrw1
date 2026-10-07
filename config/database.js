@@ -131,6 +131,13 @@ db.exec(`
     created_at DATETIME DEFAULT (NOW_LOCAL())
   );
 
+  CREATE TABLE IF NOT EXISTS customer_portal_credentials (
+    customer_id INTEGER PRIMARY KEY REFERENCES customers(id) ON DELETE CASCADE,
+    password_hash TEXT NOT NULL,
+    auth_version TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE TABLE IF NOT EXISTS technicians (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE NOT NULL,

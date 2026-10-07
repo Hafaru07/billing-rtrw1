@@ -8,6 +8,8 @@ const { logger } = require('../config/logger');
 const db = require('../config/database');
 const customerDevice = require('../services/customerDeviceService');
 const customerSvc = require('../services/customerService');
+const { createCustomerPortalAuth, validatePassword: validatePortalPassword } = require('../services/customerPortalAuth');
+const customerPortalAuth = createCustomerPortalAuth(db);
 const billingSvc = require('../services/billingService');
 const pdfSvc = require('../services/pdfInvoiceService');
 const mikrotikService = require('../services/mikrotikService');
@@ -1856,6 +1858,10 @@ router.get('/customers', requireAdminSession, requireSidebarMenuAccess('customer
 
 router.post('/customers', requireAdminSession, express.urlencoded({ extended: true }), async (req, res) => {
   try {
+    const portalPassword = validatePortalPassword(req.body.portal_password);
+    customerPortalAuth.assertPhoneAvailable(req.body.phone);
+    delete req.body.portal_password;
+    req.body.pppoe_password = '';
     const connectionType = String(req.body.connection_type || 'pppoe').trim().toLowerCase() || 'pppoe';
     req.body.connection_type = connectionType;
 
@@ -1980,7 +1986,8 @@ router.post('/customers', requireAdminSession, express.urlencoded({ extended: tr
     const isRadius = radiusEnabled ? (req.body.is_radius !== undefined ? (Number(req.body.is_radius) === 1 ? 1 : 0) : 0) : 0;
     req.body.is_radius = isRadius;
 
-    customerSvc.createCustomer(req.body);
+    const created = customerSvc.createCustomer(req.body);
+    customerPortalAuth.setPassword(Number(created.lastInsertRowid), portalPassword);
     
     // ========================================================================
     // SYNC KE MIKROTIK - PENTING: SECRET TIDAK PERNAH DIHAPUS!
@@ -2066,6 +2073,13 @@ router.post('/customers', requireAdminSession, express.urlencoded({ extended: tr
 router.post('/customers/:id/update', requireAdminSession, express.urlencoded({ extended: true }), async (req, res) => {
   try {
     const customerId = Number(req.params.id);
+    const oldCustomer = customerSvc.getCustomerById(customerId);
+    if (!oldCustomer) throw new Error('Pelanggan tidak ditemukan');
+    const portalPassword = String(req.body.portal_password || '').trim();
+    if (portalPassword) validatePortalPassword(portalPassword);
+    customerPortalAuth.assertPhoneAvailable(req.body.phone, customerId);
+    delete req.body.portal_password;
+    req.body.pppoe_password = oldCustomer.pppoe_password || '';
     const connectionType = String(req.body.connection_type || 'pppoe').trim().toLowerCase() || 'pppoe';
     req.body.connection_type = connectionType;
 
@@ -2099,16 +2113,19 @@ router.post('/customers/:id/update', requireAdminSession, express.urlencoded({ e
       const existing = db.prepare('SELECT id, name FROM customers WHERE router_id IS ? AND pppoe_username = ? AND id != ? LIMIT 1').get(effectiveRouterId, username, customerId);
       if (existing) throw new Error(`PPPoE Username sudah dipakai pelanggan lain: ${existing.name}`);
 
-      let conn = null;
-      try {
-        conn = await mikrotikService.getConnection(effectiveRouterId);
-        const results = await conn.client.menu('/ppp/secret')
-          .where('service', 'pppoe')
-          .where('name', username)
-          .get();
-        if (!Array.isArray(results) || results.length === 0) throw new Error('PPPoE Username tidak ditemukan di MikroTik');
-      } finally {
-        if (conn && conn.api) conn.api.close();
+      if (username !== String(oldCustomer.pppoe_username || '').trim() ||
+          Number(effectiveRouterId) !== Number(customerSvc.getEffectiveRouterId(oldCustomer.router_id))) {
+        let conn = null;
+        try {
+          conn = await mikrotikService.getConnection(effectiveRouterId);
+          const results = await conn.client.menu('/ppp/secret')
+            .where('service', 'pppoe')
+            .where('name', username)
+            .get();
+          if (!Array.isArray(results) || results.length === 0) throw new Error('PPPoE Username tidak ditemukan di MikroTik');
+        } finally {
+          if (conn && conn.api) conn.api.close();
+        }
       }
       
       // Set effective router ID
@@ -2181,16 +2198,24 @@ router.post('/customers/:id/update', requireAdminSession, express.urlencoded({ e
     const isRadius = radiusEnabled ? (req.body.is_radius !== undefined ? (Number(req.body.is_radius) === 1 ? 1 : 0) : 0) : 0;
     req.body.is_radius = isRadius;
 
-    // Get old customer data to detect username changes
-    const oldCustomer = customerSvc.getCustomerById(customerId);
-
-    // Password PPPoE opsional: kalau dikosongkan, pakai yang sudah tersimpan
-    // supaya kredensial lama tidak terhapus tanpa sengaja.
-    if (!String(req.body.pppoe_password || '').trim() && oldCustomer && oldCustomer.pppoe_password) {
-      req.body.pppoe_password = oldCustomer.pppoe_password;
+    if (req.body.pppoe_remote_address === undefined) {
+      req.body.pppoe_remote_address = oldCustomer.pppoe_remote_address || '';
     }
 
     customerSvc.updateCustomer(req.params.id, req.body);
+    if (portalPassword) customerPortalAuth.setPassword(customerId, portalPassword);
+    else if (String(req.body.phone || '') !== String(oldCustomer.phone || '')) {
+      customerPortalAuth.invalidateSessions(customerId);
+    }
+
+    const networkFields = ['connection_type', 'package_id', 'status', 'isolir_profile', 'is_radius',
+      ...(connectionType === 'pppoe' ? ['pppoe_username', 'pppoe_password'] : []),
+      ...(connectionType === 'hotspot' ? ['hotspot_username', 'hotspot_password', 'hotspot_profile', 'mac_address'] : []),
+      ...(connectionType === 'static' ? ['static_ip', 'mac_address'] : [])];
+    const networkChanged = networkFields.some(field =>
+      String(req.body[field] ?? '') !== String(oldCustomer[field] ?? '')) ||
+      Number(customerSvc.getEffectiveRouterId(req.body.router_id)) !==
+        Number(customerSvc.getEffectiveRouterId(oldCustomer.router_id));
     
     // ========================================================================
     // SYNC KE MIKROTIK SAAT EDIT - PENTING: SECRET TIDAK PERNAH DIHAPUS!
@@ -2208,7 +2233,7 @@ router.post('/customers/:id/update', requireAdminSession, express.urlencoded({ e
     // CATATAN: Kode ini TIDAK PERNAH menghapus secret dari MikroTik!
     // ========================================================================
     const shouldSyncToMikrotik = !radiusEnabled || !isRadius;
-    if (connectionType === 'pppoe' && req.body.pppoe_username && shouldSyncToMikrotik) {
+    if (networkChanged && connectionType === 'pppoe' && req.body.pppoe_username && shouldSyncToMikrotik) {
       try {
         const newUsername = String(req.body.pppoe_username || '').trim();
         const newPassword = String(req.body.pppoe_password || '').trim();
@@ -2253,7 +2278,7 @@ router.post('/customers/:id/update', requireAdminSession, express.urlencoded({ e
         logger.warn(`[Update] MikroTik API sync skipped/failed for customer ${customerId}: ${syncErr.message}`);
       }
     }
-    if (connectionType === 'hotspot' && req.body.hotspot_username) {
+    if (networkChanged && connectionType === 'hotspot' && req.body.hotspot_username) {
       try {
         const oldUsername = oldCustomer ? String(oldCustomer.hotspot_username || '').trim() : '';
         const newUsername = String(req.body.hotspot_username || '').trim();

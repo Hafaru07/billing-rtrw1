@@ -680,15 +680,20 @@
             <div class="login-card-body">
               <form method="POST" action="/customer/login">
                 <div class="form-floating">
-                  <input type="text" class="form-control" id="phone" name="phone" placeholder="<%= t('customer.id_tag_placeholder', 'Masukkan ID/Tag Pelanggan') %>" required autofocus>
+                  <input type="tel" class="form-control" id="phone" name="phone" inputmode="tel" autocomplete="username" placeholder="Nomor WhatsApp terdaftar" required autofocus>
                   <label for="phone">
-                    <i class="bi bi-person-badge me-2"></i><%= t('customer.id_tag', 'ID/Tag Pelanggan / No. HP') %>
+                    <i class="bi bi-person-badge me-2"></i>Nomor WhatsApp
                   </label>
+                </div>
+
+                <div class="form-floating">
+                  <input type="password" class="form-control" id="password" name="password" autocomplete="current-password" placeholder="Password login portal" required>
+                  <label for="password"><i class="bi bi-key me-2"></i>Password Login Portal</label>
                 </div>
 
                 <div class="text-center mb-3 small" style="color: #cbd5e1;">
                   <i class="bi bi-info-circle me-1"></i>
-                  Masukkan ID pelanggan / Nomor WhatsApp terdaftar
+                  Gunakan nomor WhatsApp terdaftar dan password portal dari admin.
                 </div>
 
                 <% if (settings.login_otp_enabled) { %>
@@ -705,7 +710,7 @@
               <% if (error) { %>
                 <div class="alert alert-danger mt-3 py-2 px-3 text-center small rounded-3 border-danger border-opacity-25 fw-semibold">
                   <i class="bi bi-exclamation-triangle me-2"></i>
-                  <%= error === 'Nomor HP tidak valid atau belum terdaftar.' ? 'ID/Tag tidak valid atau belum terdaftar.' : error %>
+                  <%= error %>
                 </div>
               <% } %>
 
