@@ -2,7 +2,7 @@ const WLAN_ROOT = 'InternetGatewayDevice.LANDevice.1.WLANConfiguration';
 
 const PSK_FIRST = ['PreSharedKey.1.KeyPassphrase', 'KeyPassphrase', 'PreSharedKey.1.PreSharedKey'];
 const KEY_FIRST = ['KeyPassphrase', 'PreSharedKey.1.KeyPassphrase', 'PreSharedKey.1.PreSharedKey'];
-const HG6145F1_WPA2 = ['PreSharedKey.1.KeyPassphrase'];
+const HG6145F1_PASSWORD = ['PreSharedKey.1.PreSharedKey'];
 
 function nodeAt(doc, path) {
   return String(path).split('.').reduce((node, part) => node && typeof node === 'object' ? node[part] : null, doc) || null;
@@ -45,9 +45,9 @@ function isFiveGhz(doc, base) {
 function targetWifi(doc) {
   const vendor = detectVendor(doc);
   const model = [doc?._deviceId?._ProductClass, valueAt(doc, 'InternetGatewayDevice.DeviceInfo.ModelName'), doc?._id].join(' ');
-  // HG6145F1 exposes separate WPA and WPA2 passphrases; target its WPA2 leaf only.
+  // HG6145F1 accepts password changes through this PreSharedKey leaf, not its passphrase leaves.
   const leaves = vendor === 'fiberhome' && /HG6145F1/i.test(model)
-    ? HG6145F1_WPA2
+    ? HG6145F1_PASSWORD
     : (['huawei', 'nokia'].includes(vendor) ? PSK_FIRST : KEY_FIRST);
   const bands = [];
 
