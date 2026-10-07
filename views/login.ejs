@@ -562,16 +562,17 @@
       }
     }
   </style>
+  <link rel="stylesheet" href="/css/homepage.css">
 </head>
 
 <body>
 
   <!-- Header / Navbar Section -->
-  <nav class="navbar navbar-expand-lg sticky-top custom-navbar">
+  <nav class="navbar navbar-expand-xxl sticky-top custom-navbar" aria-label="Navigasi utama">
     <div class="container">
-      <a class="navbar-brand d-flex align-items-center gap-2" href="#">
-        <img src="/img/logo.png" alt="Logo" onerror="this.style.display='none'">
-        <span class="fw-bold fs-5 text-white"><%= settings.company_header || 'Portal ISP' %></span>
+      <a class="navbar-brand d-flex align-items-center gap-2" href="#hero">
+        <span class="brand-logo"><img src="/img/logo.png" alt="Logo Elround Network"></span>
+        <span class="brand-name"><%= settings.company_header || 'Elround Network' %></span>
       </a>
 
       <button class="navbar-toggler border-0 text-white" type="button" data-bs-toggle="collapse" data-bs-target="#navbarContent"
@@ -580,7 +581,7 @@
       </button>
 
       <div class="collapse navbar-collapse" id="navbarContent">
-        <ul class="navbar-nav mx-auto mb-2 mb-lg-0 gap-1">
+        <ul class="navbar-nav mx-auto mb-2 mb-xxl-0 gap-1">
           <li class="nav-item">
             <a class="nav-link active" href="#hero"><i class="bi bi-house-door me-1"></i> Beranda</a>
           </li>
@@ -594,12 +595,12 @@
             <a class="nav-link" href="#services"><i class="bi bi-grid me-1"></i> Layanan Cepat</a>
           </li>
           <li class="nav-item">
-            <a class="nav-link" href="#contact-info"><i class="bi bi-headset me-1"></i> Informasi</a>
+            <a class="nav-link" href="#contact-info"><i class="bi bi-file-earmark-text me-1"></i> Informasi</a>
           </li>
         </ul>
 
-        <div class="d-flex align-items-center gap-2 mt-3 mt-lg-0">
-          <button type="button" id="btn-install-pwa-nav" class="btn btn-warning btn-sm rounded-3 px-3 py-2 fw-bold d-inline-flex align-items-center shadow-sm" onclick="triggerPwaInstall()">
+        <div class="nav-actions d-flex align-items-center gap-2 mt-3 mt-xxl-0">
+          <button type="button" id="btn-install-pwa-nav" class="btn btn-warning btn-sm rounded-3 px-3 py-2 fw-bold d-inline-flex align-items-center" onclick="triggerPwaInstall()">
             <i class="bi bi-download me-1"></i> Install Aplikasi
           </button>
           <a href="/customer/check-billing" class="btn btn-outline-light btn-sm rounded-3 px-3 py-2">
@@ -616,84 +617,90 @@
   <!-- Hero & Login Section -->
   <section class="hero-section" id="hero">
     <div class="container">
-      <div class="row align-items-center">
+      <div class="hero-layout">
 
         <!-- Left Column: Company Value Proposition -->
-        <div class="col-lg-7 mb-5 mb-lg-0">
+        <div class="hero-copy">
           <div class="hero-badge">
             <i class="bi bi-lightning-charge-fill text-warning"></i>
             <span>Internet Fiber Optic Super Cepat & Unlimited</span>
           </div>
 
           <h1 class="hero-title">
-            Nikmati Koneksi Internet Terbaik Tanpa Batas Kuota
+            Internet Fiber<br><span class="hero-title-accent">Cepat, Stabil,</span> dan Tanpa Ribet
           </h1>
 
           <p class="hero-subtitle">
-            Selamat datang di portal resmi <strong><%= settings.company_header %></strong>. Kami menyediakan jaringan internet ultra cepat, stabil, dan terjangkau untuk kebutuhan rumah tangga, bisnis, gaming, hingga hiburan keluarga Anda.
+            <%= settings.company_header || 'Elround Network' %> menghadirkan koneksi internet cepat dan stabil untuk rumah, bisnis, gaming, dan hiburan keluarga. Nikmati layanan tanpa batas kuota dengan dukungan yang selalu siap membantu.
           </p>
 
-          <div class="d-flex flex-wrap gap-3 mb-4" style="max-width: 620px;">
-            <a href="/customer/register" class="btn btn-primary btn-lg rounded-3 fw-bold px-4 py-3 shadow-lg flex-fill d-inline-flex align-items-center justify-content-center" style="background: linear-gradient(135deg, #6366f1 0%, #3b82f6 100%); border: none; min-width: 260px;">
-              <i class="bi bi-person-plus-fill me-2 fs-5"></i> Daftar Pasang Baru
+          <div class="hero-actions">
+            <a href="/customer/register" class="btn hero-cta-primary d-inline-flex align-items-center justify-content-center">
+              <i class="bi bi-person-plus-fill me-2"></i> Daftar Pasang Baru <i class="bi bi-arrow-right ms-2"></i>
             </a>
-            <button type="button" id="btn-install-pwa-hero" class="btn btn-warning btn-lg rounded-3 fw-bold px-4 py-3 shadow-lg text-dark flex-fill d-inline-flex align-items-center justify-content-center" style="min-width: 260px;" onclick="triggerPwaInstall()">
-              <i class="bi bi-download me-2 fs-5"></i> Install Aplikasi Pelanggan
+            <button type="button" id="btn-install-pwa-hero" class="btn hero-cta-secondary d-inline-flex align-items-center justify-content-center" onclick="triggerPwaInstall()">
+              <i class="bi bi-download me-2"></i> Install Aplikasi Pelanggan
             </button>
-            <a href="/customer/check-billing" class="btn btn-outline-light btn-lg rounded-3 fw-bold px-4 py-3 w-100 d-inline-flex align-items-center justify-content-center mt-1" style="border-color: rgba(255, 255, 255, 0.25); background: rgba(255, 255, 255, 0.05);">
-              <i class="bi bi-receipt me-2 fs-5"></i> Cek Tagihan Saya
-            </a>
           </div>
 
           <!-- Highlight Badges -->
           <div class="hero-stats">
             <div class="stat-item">
-              <div class="stat-number"><i class="bi bi-speedometer2 text-info me-1"></i> 100%</div>
+              <span class="stat-icon stat-icon-blue"><i class="bi bi-speedometer2"></i></span>
+              <div class="stat-number">100%</div>
               <div class="stat-label">Fiber Optic</div>
+              <p>Koneksi cepat dengan latensi rendah.</p>
             </div>
             <div class="stat-item">
-              <div class="stat-number"><i class="bi bi-infinity text-success me-1"></i> No FUP</div>
-              <div class="stat-label">Bebas Kuota</div>
+              <span class="stat-icon stat-icon-green"><i class="bi bi-infinity"></i></span>
+              <div class="stat-number">No FUP</div>
+              <div class="stat-label">Internet Unlimited</div>
+              <p>Tanpa batas kuota untuk setiap hari.</p>
             </div>
             <div class="stat-item">
-              <div class="stat-number"><i class="bi bi-shield-lock-fill text-warning me-1"></i> 99.9%</div>
+              <span class="stat-icon stat-icon-yellow"><i class="bi bi-shield-fill-check"></i></span>
+              <div class="stat-number">99.9%</div>
               <div class="stat-label">Uptime SLA</div>
+              <p>Jaringan stabil untuk aktivitas Anda.</p>
             </div>
             <div class="stat-item">
-              <div class="stat-number"><i class="bi bi-headset text-primary me-1"></i> 24/7</div>
+              <span class="stat-icon stat-icon-cyan"><i class="bi bi-headset"></i></span>
+              <div class="stat-number">24/7</div>
               <div class="stat-label">Bantuan CS</div>
+              <p>Tim support siap membantu kapan saja.</p>
             </div>
           </div>
         </div>
 
         <!-- Right Column: Portal Pelanggan Login Box -->
-        <div class="col-lg-5 login-card-container" id="login-section">
-          <div class="glass-card shadow-2xl">
+        <div class="login-card-container" id="login-section">
+          <div class="glass-card portal-card">
             <div class="login-card-header">
-              <div class="d-inline-flex align-items-center justify-content-center bg-dark bg-opacity-50 border border-secondary border-opacity-25 rounded-circle p-3 mb-2" style="width:70px; height:70px;">
-                <img src="/img/logo.png" alt="Logo" style="width:40px; height:40px; object-fit:contain;" onerror="this.src='/favicon.ico'; this.onerror=null;">
+              <div class="portal-logo">
+                <img src="/img/logo.png" alt="Logo Elround Network">
               </div>
               <h4 class="fw-bold mb-1 text-white"><%= t('customer.portal_title', 'Portal Pelanggan') %></h4>
-              <p class="small text-white opacity-75 mb-0"><%= settings.company_header %></p>
+              <p class="small mb-0"><%= settings.company_header %></p>
             </div>
 
             <div class="login-card-body">
               <form method="POST" action="/customer/login">
-                <div class="form-floating">
-                  <input type="tel" class="form-control" id="phone" name="phone" inputmode="tel" autocomplete="username" placeholder="Nomor WhatsApp terdaftar" required autofocus>
-                  <label for="phone">
-                    <i class="bi bi-person-badge me-2"></i>Nomor WhatsApp
-                  </label>
+                <div class="portal-field">
+                  <label for="phone" class="visually-hidden">Nomor WhatsApp</label>
+                  <i class="bi bi-whatsapp" aria-hidden="true"></i>
+                  <input type="tel" class="form-control" id="phone" name="phone" inputmode="tel" autocomplete="username" placeholder="Nomor WhatsApp" required autofocus>
                 </div>
 
-                <div class="form-floating">
-                  <input type="password" class="form-control" id="password" name="password" autocomplete="current-password" placeholder="Password login portal" required>
-                  <label for="password"><i class="bi bi-key me-2"></i>Password Login Portal</label>
+                <div class="portal-field">
+                  <label for="password" class="visually-hidden">Password Login Portal</label>
+                  <i class="bi bi-lock" aria-hidden="true"></i>
+                  <input type="password" class="form-control" id="password" name="password" autocomplete="current-password" placeholder="Password Login Portal" required>
+                  <button type="button" class="password-visibility" id="password-visibility" aria-label="Tampilkan password" aria-pressed="false" title="Tampilkan password"><i class="bi bi-eye-slash" aria-hidden="true"></i></button>
                 </div>
 
-                <div class="text-center mb-3 small" style="color: #cbd5e1;">
-                  <i class="bi bi-info-circle me-1"></i>
-                  Gunakan nomor WhatsApp terdaftar dan password portal dari admin.
+                <div class="portal-options">
+                  <label class="remember-phone"><input type="checkbox" id="remember-phone"> Ingat nomor saya</label>
+                  <a href="<%= settings.company_phone ? 'https://wa.me/' + String(settings.company_phone).replace(/\D/g,'').replace(/^0/, '62') + '?text=' + encodeURIComponent('Halo, saya lupa password login portal pelanggan.') : '/customer/contact' %>"<% if (settings.company_phone) { %> target="_blank" rel="noopener"<% } %>>Lupa password?</a>
                 </div>
 
                 <% if (settings.login_otp_enabled) { %>
@@ -715,6 +722,7 @@
               <% } %>
 
               <!-- Fast Tool Shortcuts -->
+              <div class="portal-divider"><span>atau</span></div>
               <div class="quick-tools-grid">
                 <a href="/customer/check-billing" class="btn-quick-tool">
                   <i class="bi bi-receipt text-info fs-5"></i> Cek Tagihan
@@ -724,10 +732,10 @@
                 </a>
               </div>
 
-              <div class="text-center mt-4 pt-2 border-top border-secondary border-opacity-20">
+              <div class="portal-register text-center">
                 <p class="mb-0 small" style="color: #cbd5e1;">
                   <%= t('customer.not_subscribed', 'Belum berlangganan?') %>
-                  <a href="/customer/register" class="fw-bold text-decoration-none ms-1" style="color: #a5b4fc;">
+                  <a href="/customer/register" class="fw-bold text-decoration-none ms-1">
                     <%= t('customer.register_new', 'Daftar Pemasangan Baru') %> <i class="bi bi-arrow-right"></i>
                   </a>
                 </p>
@@ -761,13 +769,16 @@
         </div>
       <% } else { %>
         <% const list = pkgs.slice().sort((a,b) => Number(a.price||0) - Number(b.price||0)); %>
-        <div class="row g-4 justify-content-center">
+        <div class="row g-3 justify-content-center package-grid">
           <% list.forEach((p, index) => { %>
-            <div class="col-md-6 col-lg-4">
+            <div class="col-md-6 col-lg-4 col-xl-3">
               <div class="glass-card pkg-card">
                 <% if (index === Math.floor(list.length / 2)) { %>
                   <div class="pkg-badge-popular"><i class="bi bi-star-fill me-1"></i> Terpopuler</div>
                 <% } %>
+
+                <div class="pkg-top-icon" aria-hidden="true"><i class="bi <%= ['bi-house-door-fill','bi-house-heart-fill','bi-building-fill','bi-controller'][index % 4] %>"></i></div>
+                <h3 class="pkg-name"><%= p.name %></h3>
 
                 <div class="pkg-speed-tag">
                   <i class="bi bi-speedometer2 me-1"></i>
@@ -777,8 +788,6 @@
                     Speed High-Speed
                   <% } %>
                 </div>
-
-                <h3 class="pkg-name"><%= p.name %></h3>
 
                 <div class="pkg-price">
                   Rp <%= Number(p.price||0).toLocaleString('id-ID') %>
@@ -1129,6 +1138,39 @@
   <!-- Scripts -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
   <script>
+    const portalForm = document.querySelector('form[action="/customer/login"]');
+    const phoneInput = document.getElementById('phone');
+    const rememberPhone = document.getElementById('remember-phone');
+    const passwordInput = document.getElementById('password');
+    const passwordVisibility = document.getElementById('password-visibility');
+
+    try {
+      const savedPhone = localStorage.getItem('elround_remember_phone');
+      if (savedPhone) {
+        phoneInput.value = savedPhone;
+        rememberPhone.checked = true;
+      }
+    } catch (_) {}
+
+    portalForm.addEventListener('submit', () => {
+      try {
+        if (rememberPhone.checked) {
+          localStorage.setItem('elround_remember_phone', phoneInput.value.trim());
+        } else {
+          localStorage.removeItem('elround_remember_phone');
+        }
+      } catch (_) {}
+    });
+
+    passwordVisibility.addEventListener('click', () => {
+      const isVisible = passwordInput.type === 'text';
+      passwordInput.type = isVisible ? 'password' : 'text';
+      passwordVisibility.setAttribute('aria-pressed', String(!isVisible));
+      passwordVisibility.setAttribute('aria-label', isVisible ? 'Tampilkan password' : 'Sembunyikan password');
+      passwordVisibility.title = isVisible ? 'Tampilkan password' : 'Sembunyikan password';
+      passwordVisibility.querySelector('i').className = isVisible ? 'bi bi-eye-slash' : 'bi bi-eye';
+    });
+
     // PWA Prompt Handler
     let deferredPwaPrompt = null;
 
@@ -1215,6 +1257,15 @@
     // Highlight active nav item on scroll
     const sections = document.querySelectorAll('section[id], header[id]');
     const navLinks = document.querySelectorAll('.nav-link');
+
+    document.querySelectorAll('#navbarContent a[href^="#"]').forEach(link => {
+      link.addEventListener('click', () => {
+        const menu = document.getElementById('navbarContent');
+        if (menu.classList.contains('show') && typeof bootstrap !== 'undefined') {
+          bootstrap.Collapse.getOrCreateInstance(menu).hide();
+        }
+      });
+    });
 
     window.addEventListener('scroll', () => {
       let current = '';
