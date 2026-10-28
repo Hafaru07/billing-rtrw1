@@ -2,7 +2,7 @@ const WLAN_ROOT = 'InternetGatewayDevice.LANDevice.1.WLANConfiguration';
 
 const PSK_FIRST = ['PreSharedKey.1.KeyPassphrase', 'KeyPassphrase', 'PreSharedKey.1.PreSharedKey'];
 const KEY_FIRST = ['KeyPassphrase', 'PreSharedKey.1.KeyPassphrase', 'PreSharedKey.1.PreSharedKey'];
-const HG6145F1_PASSWORD = ['PreSharedKey.1.PreSharedKey'];
+const FIBERHOME_PASSWORD = ['PreSharedKey.1.PreSharedKey', 'PreSharedKey.1.KeyPassphrase', 'KeyPassphrase'];
 
 function nodeAt(doc, path) {
   return String(path).split('.').reduce((node, part) => node && typeof node === 'object' ? node[part] : null, doc) || null;
@@ -22,10 +22,10 @@ function detectVendor(doc) {
   const id = doc?._deviceId || {};
   const model = String(id._ProductClass || '').toUpperCase();
   const keys = Object.keys(nodeAt(doc, WLAN_ROOT + '.1') || {});
-  if (keys.some(key => key.startsWith('X_CMCC_'))) return 'zte-cmcc';
   const identity = [id._Manufacturer, id._OUI, model, doc?._id].join(' ').toUpperCase();
-  if (/HUAWEI|HWTC/.test(identity) || keys.some(key => key.startsWith('X_HW_'))) return 'huawei';
   if (/FIBERHOME|FHTT|HG6145(?:D2|F1)/.test(identity)) return 'fiberhome';
+  if (keys.some(key => key.startsWith('X_CMCC_'))) return 'zte-cmcc';
+  if (/HUAWEI|HWTC/.test(identity) || keys.some(key => key.startsWith('X_HW_'))) return 'huawei';
   if (/NOKIA|ALCL|ALCATEL/.test(identity) || /^G-\d/.test(model) || keys.some(key => key.startsWith('X_ALU'))) return 'nokia';
   if (/ZTE/.test(identity)) return 'zte';
   return 'lainnya';
@@ -44,10 +44,8 @@ function isFiveGhz(doc, base) {
 
 function targetWifi(doc) {
   const vendor = detectVendor(doc);
-  const model = [doc?._deviceId?._ProductClass, valueAt(doc, 'InternetGatewayDevice.DeviceInfo.ModelName'), doc?._id].join(' ');
-  // HG6145F1 accepts password changes through this PreSharedKey leaf, not its passphrase leaves.
-  const leaves = vendor === 'fiberhome' && /HG6145F1/i.test(model)
-    ? HG6145F1_PASSWORD
+  const leaves = vendor === 'fiberhome'
+    ? FIBERHOME_PASSWORD
     : (['huawei', 'nokia'].includes(vendor) ? PSK_FIRST : KEY_FIRST);
   const bands = [];
 
@@ -62,7 +60,10 @@ function targetWifi(doc) {
       band,
       ssidValue: valueAt(doc, base + '.SSID'),
       ssidPath: writable(doc, base + '.SSID') ? base + '.SSID' : null,
-      passwordPaths: leaves.map(leaf => base + '.' + leaf).filter(path => writable(doc, path))
+      passwordPaths: leaves.map(leaf => base + '.' + leaf).filter(path =>
+        writable(doc, path) || (vendor === 'fiberhome' && path.endsWith('.PreSharedKey.1.PreSharedKey') &&
+          !nodeAt(doc, path) && nodeAt(doc, base)?._writable !== false)
+      )
     });
   }
 

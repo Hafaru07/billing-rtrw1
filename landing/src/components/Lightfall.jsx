@@ -330,6 +330,7 @@ const Lightfall = ({
   mixBlendMode,
   paused = false,
   dpr,
+  maxFps = 0,
   className = '',
   style
 }) => {
@@ -364,7 +365,8 @@ const Lightfall = ({
     fade: clamp(fade, 0, 1),
     lightMode,
     paused,
-    dpr
+    dpr,
+    maxFps
   };
 
   useEffect(() => {
@@ -479,12 +481,14 @@ const Lightfall = ({
       const cssHeight = Math.max(1, container.clientHeight);
       gl.bindVertexArray(vao);
       allocate(scene, width, height);
-      levels.forEach((pair, index) => {
-        const levelWidth = Math.max(1, Math.round(cssWidth / 2 ** (index + 1)));
-        const levelHeight = Math.max(1, Math.round(cssHeight / 2 ** (index + 1)));
-        allocate(pair[0], levelWidth, levelHeight);
-        allocate(pair[1], levelWidth, levelHeight);
-      });
+      if (s.bloom > 0) {
+        levels.forEach((pair, index) => {
+          const levelWidth = Math.max(1, Math.round(cssWidth / 2 ** (index + 1)));
+          const levelHeight = Math.max(1, Math.round(cssHeight / 2 ** (index + 1)));
+          allocate(pair[0], levelWidth, levelHeight);
+          allocate(pair[1], levelWidth, levelHeight);
+        });
+      }
 
       const intro = state.intro;
       const presence = Math.min(1, intro * 2.2);
@@ -585,6 +589,10 @@ const Lightfall = ({
       raf = 0;
       if (!visible || document.hidden) return;
       const s = settingsRef.current;
+      if (s.maxFps > 0 && last && now - last < 1000 / s.maxFps) {
+        raf = requestAnimationFrame(frame);
+        return;
+      }
       const dt = last ? Math.min(0.05, (now - last) / 1000) : 1 / 60;
       last = now;
       if (!s.intro || reduce) state.intro = 1;

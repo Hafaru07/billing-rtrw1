@@ -477,6 +477,17 @@ function collectRefreshObjects(device) {
       objects.push('Device.WiFi.AccessPoint.2.AssociatedDevice');
     }
   } else {
+    if (targetWifi(device).vendor === 'fiberhome') {
+      const wlan = device?.InternetGatewayDevice?.LANDevice?.['1']?.WLANConfiguration;
+      if (wlan) {
+        for (const index of ['1', '2', '5']) {
+          if (wlan[index]) objects.push(`InternetGatewayDevice.LANDevice.1.WLANConfiguration.${index}`);
+        }
+      }
+      if (!wlan?.['5'] && !wlan?.['2']) {
+        objects.push('InternetGatewayDevice.LANDevice.1.WLANConfiguration');
+      }
+    }
     // TR-098 Device (InternetGatewayDevice) - validate before pushing
     // FIX for Error 9005: Only query objects that exist in device cache
     // Some devices (e.g. ZTE GM220-S XPON) don't have LANDevice/WiFi support
@@ -954,6 +965,31 @@ async function ambilPohonWifi(instance, deviceId) {
   return list.find(x => x && x._id === deviceId) || null;
 }
 
+const wifiRefreshTerakhir = new Map();
+async function sinkronkanPohonWifi(instance, deviceId, doc) {
+  const terakhir = wifiRefreshTerakhir.get(deviceId) || 0;
+  if (Date.now() - terakhir < 60000) return true;
+  const wlan = doc?.InternetGatewayDevice?.LANDevice?.['1']?.WLANConfiguration;
+  const roots = ['1', '2', '5'].filter(index => wlan?.[index])
+    .map(index => `InternetGatewayDevice.LANDevice.1.WLANConfiguration.${index}`);
+  if (!wlan?.['5'] && !wlan?.['2']) roots.push('InternetGatewayDevice.LANDevice.1.WLANConfiguration');
+  const url = '/devices/' + encodeURIComponent(deviceId) + '/tasks';
+  try {
+    for (const objectName of roots) {
+      const result = await instance.post(url, { name: 'refreshObject', objectName }, {
+        params: { timeout: 15000, connection_request: '' }, timeout: 30000,
+        validateStatus: () => true
+      });
+      if (![200, 202].includes(Number(result.status))) throw new Error('HTTP ' + result.status);
+    }
+    wifiRefreshTerakhir.set(deviceId, Date.now());
+    return true;
+  } catch (error) {
+    logger.warn('[WiFi] Sinkronisasi parameter ' + deviceId + ' gagal: ' + error.message);
+    return false;
+  }
+}
+
 // Task setParameterValues WiFi yang pernah gagal di perangkat ini (misalnya
 // tinggalan versi lama yang ikut mengirim path Device.WiFi) terus diulang
 // GenieACS di setiap inform. Bersihkan sebelum mengirim perintah baru.
@@ -1153,6 +1189,16 @@ async function ubahWifi(tag, jenis, nilaiPerBand, actor, wajib5g = false) {
     }
 
     const { vendor, bands } = targetWifi(doc);
+    const perluSinkronisasi = vendor === 'fiberhome' && (
+      !bands.some(item => item.band === '2.4G') ||
+      ((jenis === 'steering' || jenis === 'password-both' || wajib5g || nilaiPerBand['5G'] !== undefined) &&
+        !bands.some(item => item.band === '5G')) ||
+      ((jenis === 'steering' || jenis === 'ssid') && bands.some(item => !item.ssidPath))
+    );
+    if (perluSinkronisasi && await sinkronkanPohonWifi(instance, deviceId, doc)) {
+      return { ok: false, status: 'syncing', vendor,
+        message: 'Daftar dan parameter WiFi sedang disinkronkan dari modem. Tunggu sebentar, lalu coba lagi.' };
+    }
     if (jenis === 'steering' || jenis === 'password-both') {
       const wifi24 = bands.find(item => item.band === '2.4G');
       const wifi5 = bands.find(item => item.band === '5G');

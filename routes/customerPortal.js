@@ -2326,7 +2326,7 @@ async function prosesGantiWifi(req, res, jenis) {
       }
     }
 
-    const kodeHttp = hasil.ok ? 200 : (hasil.status === 'busy' ? 429 : (hasil.status === 'notfound' ? 404 : (hasil.status === 'invalid' || hasil.status === 'unsupported' ? 400 : 502)));
+    const kodeHttp = hasil.ok ? 200 : (hasil.status === 'busy' ? 429 : (hasil.status === 'notfound' ? 404 : (hasil.status === 'syncing' ? 409 : (hasil.status === 'invalid' || hasil.status === 'unsupported' ? 400 : 502))));
     const balasan = { ok: hasil.ok, status: hasil.status, message: pesan, bands: hasil.bands || {} };
     if (adaPerubahan) balasan.retryAfter = Math.ceil(JEDA_AKSI_MODEM_MS / 1000);
     if (jenis === 'ssid') {
