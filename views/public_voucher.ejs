@@ -226,6 +226,9 @@
             <i class="bi bi-check-circle me-2"></i><%= info %>
           </div>
         <% } %>
+        <% if (hotspotReturnUnavailable) { %>
+          <div class="alert alert-warning">Alamat login hotspot belum terdaftar di billing. Voucher tetap bisa dibeli, lalu kode dipakai manual di halaman hotspot.</div>
+        <% } %>
 
         <% if (order) { %>
           <div class="mb-3">
@@ -268,7 +271,7 @@
                 </div>
               <% } else if (String(order.status) === 'pending' && (String(order.payment_gateway || '') === 'qris_static' || order.qris_amount_unique)) { %>
                 <% if (orderToken) { %>
-                  <a class="btn btn-primary btnx mt-3 w-100" href="/customer/voucher/qris/<%= order.id %>?t=<%= encodeURIComponent(orderToken) %>">
+                  <a class="btn btn-primary btnx mt-3 w-100" href="/customer/voucher/qris/<%= order.id %>?t=<%= encodeURIComponent(orderToken) %><%= hotspotLoginUrl ? '&hotspot_login=' + encodeURIComponent(hotspotLoginUrl) : '' %>">
                     <i class="bi bi-qr-code-scan me-1"></i> Buka QRIS Statis
                   </a>
                 <% } else { %>
@@ -285,6 +288,9 @@
         <% } %>
 
         <form method="POST" action="/customer/public/voucher/create-payment" class="d-grid gap-2">
+          <% if (hotspotLoginUrl) { %>
+            <input type="hidden" name="hotspot_login" value="<%= hotspotLoginUrl %>">
+          <% } %>
           <div class="row g-2">
             <div class="col-12 col-lg-7">
               <label class="muted small mb-1">Paket Voucher</label>
@@ -448,6 +454,11 @@
       </div>
     </div>
   </div>
+  <div id="hotspot-voucher-return" hidden
+    data-login-url="<%= hotspotLoginUrl || '' %>"
+    data-voucher-code="<%= order && String(order.status) === 'fulfilled' ? (order.voucher_code || '') : '' %>"
+    data-voucher-password="<%= order && String(order.status) === 'fulfilled' ? (order.voucher_password || '') : '' %>"></div>
+  <script src="/js/hotspot-voucher-return.js"></script>
   <% if (order && (String(order.status) === 'paid' || String(order.status) === 'pending') && !order.voucher_code) { %>
   <script>
     setTimeout(() => {

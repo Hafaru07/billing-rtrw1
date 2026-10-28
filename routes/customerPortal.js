@@ -22,6 +22,7 @@ const QRCode = require('qrcode');
 const _jimpMod = require('jimp');
 const Jimp = _jimpMod.Jimp || _jimpMod;
 const qrisUtil = require('../utils/qrisUtil');
+const { resolveHotspotContext } = require('../utils/hotspotVoucherReturn');
 const whatsappService = require('../services/whatsappService');
 const { BinaryBitmap, HybridBinarizer, RGBLuminanceSource, MultiFormatReader, BarcodeFormat, DecodeHintType } = require('@zxing/library');
 let loginRateLimiter = (req, res, next) => next();
@@ -889,6 +890,13 @@ router.get('/voucher', async (req, res) => {
   const settings = getSettingsWithCache();
   const error = String(req.query.err || '').trim() || null;
   const info = String(req.query.info || '').trim() || null;
+  const activeRouters = db.prepare('SELECT id, host FROM routers WHERE is_active = 1').all();
+  const hotspotLoginRequested = typeof req.query.hotspot_login === 'string' && req.query.hotspot_login.length > 0;
+  const hotspotContext = resolveHotspotContext(req.query.hotspot_login, settings, activeRouters);
+  const hotspotLoginUrl = hotspotContext?.loginUrl || '';
+  const matchesHotspotRouter = (profile) => !hotspotContext ||
+    (profile.router_id ?? null) === hotspotContext.routerId ||
+    (activeRouters.length === 1 && profile.router_id == null);
 
   const getConfiguredVoucherPrice = (routerId, profileName) => {
     const rid = routerId === undefined ? null : routerId;
@@ -940,7 +948,7 @@ router.get('/voucher', async (req, res) => {
         WHERE is_active = 1
           AND LOWER(TRIM(profile_name)) != 'default'
         ORDER BY price ASC
-      `).all();
+      `).all().filter(matchesHotspotRouter);
 
       if (activePackages.length > 0) {
         const profiles = activePackages.map(row => ({
@@ -965,10 +973,10 @@ router.get('/voucher', async (req, res) => {
         FROM voucher_batches
         WHERE price > 0
           AND LOWER(TRIM(profile_name)) != 'default'
-        GROUP BY profile_name
+        GROUP BY router_id, profile_name
         HAVING id = MAX(id)
         ORDER BY price ASC
-      `).all();
+      `).all().filter(matchesHotspotRouter);
 
       if (dbRows.length > 0) {
         const profiles = dbRows.map(row => ({
@@ -989,19 +997,18 @@ router.get('/voucher', async (req, res) => {
       logger.warn('[Voucher] voucher_batches kosong atau tidak ada harga — coba last-known-good');
 
       // ── FALLBACK: last-known-good dari query sebelumnya ────────────────
-      if (_voucherLastGoodProfiles && _voucherLastGoodProfiles.length > 0) {
-        return _voucherLastGoodProfiles;
+      const cachedProfiles = (_voucherLastGoodProfiles || []).filter(matchesHotspotRouter);
+      if (cachedProfiles.length > 0) {
+        return cachedProfiles;
       }
 
       // ── LAST RESORT: coba MikroTik dengan timeout singkat 3 detik ──────
       logger.warn('[Voucher] Fallback ke MikroTik (last resort)...');
-      const mikrotikHost = settings.mikrotik_host;
-      const mikrotikUser = settings.mikrotik_user;
-      const mikrotikPassword = settings.mikrotik_password;
-      if (!mikrotikHost || !mikrotikUser || !mikrotikPassword) return [];
-
       const routers = mikrotikService.getAllRouters().filter(r => r.is_active);
-      const routerList = routers.length > 0 ? routers : [{ id: null, name: 'default' }];
+      if (routers.length === 0 && (!settings.mikrotik_host || !settings.mikrotik_user || !settings.mikrotik_password)) return [];
+      const routerList = hotspotContext
+        ? (hotspotContext.routerId === null ? [{ id: null, name: 'default' }] : routers.filter((router) => router.id === hotspotContext.routerId))
+        : (routers.length > 0 ? routers : [{ id: null, name: 'default' }]);
 
       const mikrotikResults = await Promise.allSettled(
         routerList.map(r =>
@@ -1036,7 +1043,7 @@ router.get('/voucher', async (req, res) => {
 
     } catch (e) {
       logger.error('[Voucher] Error getVoucherProfiles: ' + e.message);
-      return _voucherLastGoodProfiles || [];
+      return (_voucherLastGoodProfiles || []).filter(matchesHotspotRouter);
     }
   };
 
@@ -1110,7 +1117,7 @@ router.get('/voucher', async (req, res) => {
 
   // OPTIMASI UTAMA: Parallel execution untuk profiles dan payment channels
   // Tidak perlu menunggu satu selesai baru eksekusi yang lain
-  const [profiles, paymentChannels] = await Promise.all([
+  const [allProfiles, paymentChannels] = await Promise.all([
     getVoucherProfiles().catch(e => {
       logger.error('[Voucher] Error getting profiles: ' + e.message);
       return [];
@@ -1120,6 +1127,7 @@ router.get('/voucher', async (req, res) => {
       return [];
     })
   ]);
+  const profiles = allProfiles.filter(matchesHotspotRouter);
 
   let order = null;
   let orderToken = null;
@@ -1133,12 +1141,17 @@ router.get('/voucher', async (req, res) => {
     }
   }
 
+  const returnLoginUrl = order && hotspotContext && (order.router_id ?? null) !== hotspotContext.routerId
+    ? '' : hotspotLoginUrl;
+
   res.render('public_voucher', {
     settings,
     profiles,
     paymentChannels,
     order,
     orderToken,
+    hotspotLoginUrl: returnLoginUrl,
+    hotspotReturnUnavailable: hotspotLoginRequested && !returnLoginUrl,
     error,
     info
   });
@@ -1156,11 +1169,15 @@ router.get('/voucher/qris/:orderId', async (req, res) => {
   try {
     const order = db.prepare('SELECT * FROM public_voucher_orders WHERE id = ?').get(orderId);
     if (!order) throw new Error('Order tidak ditemukan');
+    const activeRouters = db.prepare('SELECT id, host FROM routers WHERE is_active = 1').all();
+    const hotspotContext = resolveHotspotContext(req.query.hotspot_login, settings, activeRouters);
+    const returnSuffix = hotspotContext && (order.router_id ?? null) === hotspotContext.routerId
+      ? '&hotspot_login=' + encodeURIComponent(hotspotContext.loginUrl) : '';
     if (String(order.status) === 'fulfilled' && order.voucher_code) {
-      return res.redirect('/customer/voucher?order=' + encodeURIComponent(String(orderId)) + '&t=' + encodeURIComponent(String(req.query.t || '')));
+      return res.redirect('/customer/voucher?order=' + encodeURIComponent(String(orderId)) + '&t=' + encodeURIComponent(String(req.query.t || '')) + returnSuffix);
     }
     if (String(order.status) !== 'pending') {
-      return res.redirect('/customer/voucher?order=' + encodeURIComponent(String(orderId)) + '&t=' + encodeURIComponent(String(req.query.t || '')));
+      return res.redirect('/customer/voucher?order=' + encodeURIComponent(String(orderId)) + '&t=' + encodeURIComponent(String(req.query.t || '')) + returnSuffix);
     }
 
     const { uniqueCode, amountUnique } = ensureVoucherOrderQrisUnique(order, false);
@@ -1170,7 +1187,7 @@ router.get('/voucher/qris/:orderId', async (req, res) => {
 
     return res.render('qris_static', {
       settings,
-      backUrl: '/customer/voucher?order=' + encodeURIComponent(String(orderId)) + '&t=' + encodeURIComponent(String(req.query.t || '')),
+      backUrl: '/customer/voucher?order=' + encodeURIComponent(String(orderId)) + '&t=' + encodeURIComponent(String(req.query.t || '')) + returnSuffix,
       error: null,
       info: null,
       kind: 'voucher',
@@ -1184,7 +1201,7 @@ router.get('/voucher/qris/:orderId', async (req, res) => {
       adminWaDigits,
       publicToken: String(req.query.t || ''),
       proofUrl: String(order.proof_url || ''),
-      proofActionUrl: '/customer/voucher/proof/' + encodeURIComponent(String(orderId))
+      proofActionUrl: '/customer/voucher/proof/' + encodeURIComponent(String(orderId)) + (returnSuffix ? '?' + returnSuffix.slice(1) : '')
     });
   } catch (e) {
     return res.redirect('/customer/voucher?order=' + encodeURIComponent(String(orderId)) + '&t=' + encodeURIComponent(String(req.query.t || '')) + '&err=' + encodeURIComponent(String(e?.message || e || 'Gagal')));
@@ -1221,6 +1238,12 @@ router.get('/voucher/status/:orderId', async (req, res) => {
 
 router.post('/public/voucher/create-payment', async (req, res) => {
   const settings = getSettingsWithCache();
+  const activeRouters = db.prepare('SELECT id, host FROM routers WHERE is_active = 1').all();
+  const hotspotLoginRequested = typeof req.body.hotspot_login === 'string' && req.body.hotspot_login.length > 0;
+  const hotspotContext = resolveHotspotContext(req.body.hotspot_login, settings, activeRouters);
+  if (hotspotLoginRequested && !hotspotContext) {
+    return res.redirect('/customer/voucher?err=' + encodeURIComponent('Alamat login hotspot tidak dikenal. Buka lagi tombol Beli Voucher dari hotspot.'));
+  }
 
   const buyerPhone = normalizeBuyerPhone(req.body.buyer_phone);
   const profileName = String(req.body.profile_name || '').trim();
@@ -1270,7 +1293,9 @@ router.post('/public/voucher/create-payment', async (req, res) => {
   let selectedRouterId = null;
   try {
     const routers = mikrotikService.getAllRouters().filter(r => r.is_active);
-    const routerList = routers.length > 0 ? routers : [{ id: null }];
+    const routerList = hotspotContext
+      ? (hotspotContext.routerId === null ? [{ id: null }] : routers.filter((router) => router.id === hotspotContext.routerId))
+      : (routers.length > 0 ? routers : [{ id: null }]);
 
     for (const router of routerList) {
       try {
@@ -1282,7 +1307,8 @@ router.post('/public/voucher/create-payment', async (req, res) => {
         let price = Number(meta?.price || 0) || 0;
         let validity = String(meta?.validity || '').trim();
         if (price <= 0 || !validity) {
-          const configured = getConfiguredVoucherPrice(router.id ?? null, profileName);
+          const configured = getConfiguredVoucherPrice(router.id ?? null, profileName) ||
+            (hotspotContext && activeRouters.length === 1 ? getConfiguredVoucherPrice(null, profileName) : null);
           if (configured) {
             price = Number(configured.price || 0) || 0;
             validity = String(configured.validity || '').trim();
@@ -1304,15 +1330,16 @@ router.post('/public/voucher/create-payment', async (req, res) => {
   // ── Robust DB Fallback ──────────────────
   if (!selected) {
     logger.warn(`[Voucher] Resolving profile '${profileName}' from MikroTik failed or timed out. Falling back to local DB...`);
-    const configured = getConfiguredVoucherPrice(null, profileName);
+    const configured = getConfiguredVoucherPrice(hotspotContext?.routerId ?? null, profileName) ||
+      (hotspotContext && activeRouters.length === 1 ? getConfiguredVoucherPrice(null, profileName) : null);
     if (configured) {
       selected = {
         name: profileName,
         validity: configured.validity || '-',
         price: configured.price
       };
-      selectedRouterId = null;
-    } else {
+      selectedRouterId = hotspotContext?.routerId ?? null;
+    } else if (!hotspotContext) {
       try {
         const anyPkg = db.prepare(`
           SELECT price, validity, router_id
@@ -1400,7 +1427,8 @@ router.post('/public/voucher/create-payment', async (req, res) => {
         orderId
       );
 
-      return res.redirect('/customer/voucher/qris/' + encodeURIComponent(String(orderId)) + '?t=' + encodeURIComponent(token));
+      const returnSuffix = hotspotContext ? '&hotspot_login=' + encodeURIComponent(hotspotContext.loginUrl) : '';
+      return res.redirect('/customer/voucher/qris/' + encodeURIComponent(String(orderId)) + '?t=' + encodeURIComponent(token) + returnSuffix);
     }
 
     const gateway = resolveConfiguredGatewayForAmount(settings, selected.price);
@@ -1440,7 +1468,8 @@ router.post('/public/voucher/create-payment', async (req, res) => {
 
     const secret = settings.session_secret || 'rahasia-portal-pelanggan-default-ganti-ini';
     const token = signPublicToken({ voucherOrderId: orderId, exp: Date.now() + 24 * 60 * 60 * 1000 }, secret);
-    const returnPath = `/customer/voucher?order=${encodeURIComponent(String(orderId))}&t=${encodeURIComponent(token)}`;
+    const returnSuffix = hotspotContext ? '&hotspot_login=' + encodeURIComponent(hotspotContext.loginUrl) : '';
+    const returnPath = `/customer/voucher?order=${encodeURIComponent(String(orderId))}&t=${encodeURIComponent(token)}${returnSuffix}`;
 
     let result;
     if (gateway === 'midtrans') {
@@ -3244,6 +3273,10 @@ router.post('/voucher/proof/:orderId', uploadProof.single('proof'), async (req, 
     const order = db.prepare('SELECT * FROM public_voucher_orders WHERE id=?').get(orderId);
     if (!order) throw new Error('Order tidak ditemukan');
     if (String(order.status) !== 'pending') throw new Error('Order sudah tidak bisa dikonfirmasi (status bukan pending).');
+    const activeRouters = db.prepare('SELECT id, host FROM routers WHERE is_active = 1').all();
+    const hotspotContext = resolveHotspotContext(req.query.hotspot_login, settings, activeRouters);
+    const returnSuffix = hotspotContext && (order.router_id ?? null) === hotspotContext.routerId
+      ? '&hotspot_login=' + encodeURIComponent(hotspotContext.loginUrl) : '';
 
     const { uniqueCode, amountUnique } = ensureVoucherOrderQrisUnique(order, false);
     const qrisQrUrl = await getStaticQrisQrUrlForAmount(settings, amountUnique);
@@ -3284,7 +3317,7 @@ router.post('/voucher/proof/:orderId', uploadProof.single('proof'), async (req, 
     const adminWaDigits = getFirstAdminWaDigits(settings);
     return res.render('qris_static', {
       settings,
-      backUrl: '/customer/voucher?order=' + encodeURIComponent(String(orderId)) + '&t=' + encodeURIComponent(token),
+      backUrl: '/customer/voucher?order=' + encodeURIComponent(String(orderId)) + '&t=' + encodeURIComponent(token) + returnSuffix,
       error: null,
       info: 'Bukti transfer berhasil diupload. Menunggu verifikasi/auto-detect notifikasi.',
       kind: 'voucher',
@@ -3298,7 +3331,7 @@ router.post('/voucher/proof/:orderId', uploadProof.single('proof'), async (req, 
       adminWaDigits,
       publicToken: token,
       proofUrl,
-      proofActionUrl: '/customer/voucher/proof/' + encodeURIComponent(String(orderId))
+      proofActionUrl: '/customer/voucher/proof/' + encodeURIComponent(String(orderId)) + (returnSuffix ? '?' + returnSuffix.slice(1) : '')
     });
   } catch (e) {
     return res.redirect('/customer/voucher?order=' + encodeURIComponent(String(orderId)) + '&t=' + encodeURIComponent(token) + '&err=' + encodeURIComponent(String(e?.message || e || 'Gagal')));
@@ -3533,6 +3566,8 @@ router.post('/payment/callback', express.json({
           while (attempt < 10) {
             attempt++;
             const coreLen = Math.max(4, codeLength - prefix.length);
+            const code = prefix + genCustomCode(coreLen, charset);
+            const pass = code;
             const now = new Date();
             const dd = String(now.getDate()).padStart(2, '0');
             const mm = String(now.getMonth() + 1).padStart(2, '0');

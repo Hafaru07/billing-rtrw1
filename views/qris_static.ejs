@@ -237,15 +237,12 @@
       });
 
       // Auto-polling untuk cek status pembayaran
-      var pollInterval = 5000; // 5 detik
-      var maxPolls = 120; // Max 10 menit (120 x 5 detik)
+      var pollInterval = 5000;
       var pollCount = 0;
+      var pollingStartedAt = Date.now();
 
       var checkPaymentStatus = async function () {
-        if (pollCount >= maxPolls) {
-          console.log('Polling stopped: max attempts reached');
-          return;
-        }
+        if (Date.now() - pollingStartedAt > 24 * 60 * 60 * 1000) return;
         pollCount++;
 
         try {
@@ -261,13 +258,14 @@
           });
           
           if (!res.ok) {
+            if (res.status === 403 || res.status === 404) return;
             throw new Error('Status check failed');
           }
 
           var data = await res.json();
 
-          // Jika status sudah fulfilled/paid, redirect ke halaman status
-          if (data.status === 'fulfilled' || data.status === 'paid') {
+          // Voucher harus selesai dibuat di MikroTik sebelum kembali ke login hotspot.
+          if (data.status === 'fulfilled' || (kindSafe !== 'voucher' && data.status === 'paid')) {
             var backUrl = <%- JSON.stringify(String(backUrl || '')) %>;
             if (backUrl) {
               window.location.href = backUrl;
@@ -281,11 +279,11 @@
           }
 
           // Lanjutkan polling jika masih pending
-          setTimeout(checkPaymentStatus, pollInterval);
+          setTimeout(checkPaymentStatus, pollCount < 120 ? pollInterval : 30000);
         } catch (err) {
           console.error('Payment status check error:', err);
           // Retry meskipun error
-          setTimeout(checkPaymentStatus, pollInterval);
+          setTimeout(checkPaymentStatus, pollCount < 120 ? pollInterval : 30000);
         }
       };
 
