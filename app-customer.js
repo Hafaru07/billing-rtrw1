@@ -2,7 +2,10 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const dns = require('dns');
-require('dotenv').config({ path: path.join(__dirname, '.env') });
+const dotenvResult = require('dotenv').config({ path: path.join(__dirname, '.env') });
+if (Object.prototype.hasOwnProperty.call(dotenvResult.parsed || {}, 'MY_WEBHOOK_SECRET')) {
+  process.env.MY_WEBHOOK_SECRET = dotenvResult.parsed.MY_WEBHOOK_SECRET;
+}
 const crypto = require('crypto');
 const multer = require('multer');
 const QRCode = require('qrcode');
@@ -40,6 +43,7 @@ process.on('uncaughtException', (err) => {
 // Settings Management
 const session = require('express-session');
 const { getSetting, getSettingsWithCache, ensureDefaultSettings, getNowLocal, formatDateLocal, formatTimeLocal, parseDateInTimezone } = require('./config/settingsManager');
+const { getPaymentWebhookSecret, hasMatchingPaymentWebhookSecret } = require('./config/paymentWebhookSecret');
 const { SUPPORTED_LANGS, FALLBACK_LANG, normalizeLang, t } = require('./config/i18n');
 
 // Pastikan semua default settings ada (untuk migrasi/update dari GitHub)
@@ -747,24 +751,27 @@ app.post('/api/webhook/v1/payment-notif', multer().any(), async (req, res) => {
   const authHeader = req.get('authorization') || '';
   const bearerToken = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.substring(7).trim() : '';
 
-  const secret_key =
-    (typeof body === 'object' && body ? (body.secret_key ?? body.secretKey ?? body.secret) : null) ??
-    req.query?.secret_key ??
-    req.query?.secretKey ??
-    req.query?.secret ??
-    req.get('x-webhook-token') ??
-    req.get('x-webhook-secret') ??
-    req.get('x-webhook-key') ??
-    bearerToken;
+  const secretCandidates = [
+    ['body.secret_key', body?.secret_key],
+    ['body.secretKey', body?.secretKey],
+    ['body.secret', body?.secret],
+    ['query.secret_key', req.query?.secret_key],
+    ['query.secretKey', req.query?.secretKey],
+    ['query.secret', req.query?.secret],
+    ['x-webhook-token', req.get('x-webhook-token')],
+    ['x-webhook-secret', req.get('x-webhook-secret')],
+    ['x-webhook-key', req.get('x-webhook-key')],
+    ['authorization', bearerToken]
+  ];
+  const serverSecret = getPaymentWebhookSecret(getSettingsWithCache());
+  if (!serverSecret) {
+    logger.error('[WEBHOOK][payment-notif] Rejected: payment webhook secret is not configured');
+    return res.status(503).json({ ok: false, error: 'Service Unavailable', reason: 'secret_not_configured' });
+  }
 
-  const serverSecret = getSettingsWithCache().webhook_secret || process.env.MY_WEBHOOK_SECRET || 'billing-rtrw-secret-key';
-  const expectedTrim = typeof serverSecret === 'string' ? serverSecret.trim() : 'billing-rtrw-secret-key';
-  const gotTrim = String(secret_key || '').trim();
-
-  const isSecretValid = (gotTrim === expectedTrim) || (gotTrim === 'billing-rtrw-secret-key');
-
-  if (!isSecretValid) {
-    logger.warn(`[WEBHOOK][payment-notif] Forbidden: secret_key mismatch. service=${String(service || '-')} (got: ${gotTrim ? '***' + gotTrim.slice(-3) : 'empty'}, expected: ***${expectedTrim.slice(-3)})`);
+  if (!hasMatchingPaymentWebhookSecret(serverSecret, secretCandidates)) {
+    const sources = secretCandidates.filter(([, value]) => value !== undefined && value !== null && String(value).trim()).map(([source]) => source);
+    logger.warn(`[WEBHOOK][payment-notif] Forbidden: secret_key mismatch. service=${String(service || '-')} sources=${sources.join(',') || 'none'}`);
     return res.status(403).json({ ok: false, error: 'Forbidden', reason: 'secret_key_mismatch' });
   }
 

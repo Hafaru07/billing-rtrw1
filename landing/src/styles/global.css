@@ -28,6 +28,7 @@
 @media(max-width:390px){.plan-row{grid-template-columns:58px 1fr auto}}
 .motion-ready .reveal{opacity:0;transform:translateY(20px);transition:opacity .55s ease var(--reveal-delay,0ms),transform .55s ease var(--reveal-delay,0ms)}
 .motion-ready .reveal.is-visible{opacity:1;transform:translateY(0)}
+@media(max-width:850px) and (prefers-reduced-motion:no-preference){.motion-ready .reveal{transform:translateY(32px);transition-duration:.65s;transition-timing-function:cubic-bezier(.2,.7,.2,1)}}
 @media(prefers-reduced-motion:reduce){.motion-ready .reveal{opacity:1;transform:none}}
 .legal-main h1,.legal-content h2{font-weight:800}
 

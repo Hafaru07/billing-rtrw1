@@ -540,15 +540,11 @@
               <div class="fg">
                 <label class="fl">Link Webhook MacroDroid (URL POST)</label>
                 <div style="display:flex;gap:8px">
-                  <% 
-                    const base = settings.public_base_url ? settings.public_base_url.replace(/\/+$/, '') : '';
-                    const secret = process.env.MY_WEBHOOK_SECRET || '';
-                    const macroWebhookUrl = base ? (base + '/api/webhook/v1/payment-notif?secret_key=' + secret) : '/api/webhook/v1/payment-notif?secret_key=' + secret;
-                  %>
                   <input class="fc" id="macro_webhook_url" readonly value="<%= macroWebhookUrl %>">
                   <button type="button" class="btn btn-g" onclick="copyInput('macro_webhook_url', 'Link Webhook')"><i class="bi bi-copy"></i></button>
                 </div>
                 <div style="font-size:10px; color:var(--muted); margin-top:4px">Kirimkan request HTTP POST ke URL ini dari MacroDroid Anda (sudah termasuk kunci rahasia).</div>
+                <% if (!webhookSecretConfigured) { %><div style="font-size:10px; color:#b42318; margin-top:4px">Atur MY_WEBHOOK_SECRET di .env lalu restart aplikasi sebelum menyalin link ini.</div><% } %>
               </div>
             </div>
           </div>

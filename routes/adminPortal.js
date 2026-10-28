@@ -4,6 +4,7 @@
 const express = require('express');
 const router = express.Router();
 const { getSetting, getSettings, saveSettings, getNowLocal, getCurrentDateInTimezone, getCurrentTimeInfo, getNowLocalISO, formatDateLocal, formatTimeLocal, parseDateInTimezone } = require('../config/settingsManager');
+const { getPaymentWebhookSecret, buildPaymentWebhookUrl } = require('../config/paymentWebhookSecret');
 const { logger } = require('../config/logger');
 const db = require('../config/database');
 const customerDevice = require('../services/customerDeviceService');
@@ -3983,11 +3984,14 @@ router.get('/settings', requireAdminSession, requireSidebarMenuAccess('settings'
   const baseUrl = (settings && settings.app_url ? String(settings.app_url) : `${protocol}://${host}`).replace(/\/+$/, '');
   const digiflazzWebhookUrl = `${baseUrl}/webhook/digiflazz`;
   const paymentWebhookUrl = `${baseUrl}/customer/payment/callback`;
+  const webhookSecret = getPaymentWebhookSecret(settings);
   res.render('admin/settings', {
     title: 'Pengaturan Sistem', company: company(), activePage: 'settings',
     settings, msg: flashMsg(req),
     digiflazzWebhookUrl,
-    paymentWebhookUrl
+    paymentWebhookUrl,
+    macroWebhookUrl: buildPaymentWebhookUrl(baseUrl, webhookSecret),
+    webhookSecretConfigured: Boolean(webhookSecret)
   });
 });
 
@@ -3998,11 +4002,14 @@ router.get('/ewallet-logs', requireAdminSession, requireSidebarMenuAccess('setti
   const baseUrl = (settings && settings.app_url ? String(settings.app_url) : `${protocol}://${host}`).replace(/\/+$/, '');
   const digiflazzWebhookUrl = `${baseUrl}/webhook/digiflazz`;
   const paymentWebhookUrl = `${baseUrl}/customer/payment/callback`;
+  const webhookSecret = getPaymentWebhookSecret(settings);
   res.render('admin/settings', {
     title: 'Log Notifikasi E-Wallet (Webhook)', company: company(), activePage: 'ewallet_logs',
     settings, msg: flashMsg(req),
     digiflazzWebhookUrl,
     paymentWebhookUrl,
+    macroWebhookUrl: buildPaymentWebhookUrl(baseUrl, webhookSecret),
+    webhookSecretConfigured: Boolean(webhookSecret),
     viewMode: 'ewallet_logs'
   });
 });

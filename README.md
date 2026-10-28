@@ -26,6 +26,7 @@ Sistem manajemen ISP yang mengintegrasikan **penagihan**, **GenieACS**, **OLT (S
 - **Notifikasi WhatsApp pelanggan saat tagihan dibayar**: otomatis terkirim ketika invoice ditandai lunas melalui **agent**, **admin**, **kasir**, atau **approval kolektor** (jika fitur WhatsApp diaktifkan).
 - **QRIS / nominal unik**: penugasan & pembersihan kode unik invoice; cocokkan pembayaran dari notifikasi.
 - **Webhook pembayaran generik**: endpoint `POST /api/webhook/v1/payment-notif` (dengan `MY_WEBHOOK_SECRET` di `.env`) untuk mencatat notifikasi teks bank/e-wallet dan **otomatis menandai lunas** jika nominal cocok dengan tagihan unik; log tampilan & pembersihan di admin.
+- **Kunci webhook**: isi `MY_WEBHOOK_SECRET` dengan nilai rahasia milik server, lalu restart aplikasi setelah mengubah `.env`. Nilai ini dipakai lebih dulu daripada `webhook_secret` di `settings.json`. Salin ulang URL MacroDroid dari `/admin/settings` setelah mengganti kunci. Kunci contoh `billing-rtrw-secret-key` tidak diterima.
 - Callback/redirect pembayaran dari portal pelanggan; halaman **isolir** statis `/isolated` (mis. untuk redirect dari MikroTik).
 
 ### MikroTik & jaringan

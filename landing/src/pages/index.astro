@@ -96,7 +96,7 @@ import { plans, formatRupiah, whatsappUrl, company } from '../data/site';
   </main>
   <Footer />
   <script>
-    if (window.matchMedia('(min-width: 851px) and (prefers-reduced-motion: no-preference)').matches && 'IntersectionObserver' in window) {
+    if (window.matchMedia('(prefers-reduced-motion: no-preference)').matches && 'IntersectionObserver' in window) {
       const items = document.querySelectorAll('.section-heading, .plan-row, .coverage-copy h2, .coverage-copy > p, .coverage-map, .advantage-lead, .advantage-list article, .about-title-block, .about-copy, .contact-section > div');
       items.forEach((item, index) => { item.classList.add('reveal'); (item as HTMLElement).style.setProperty('--reveal-delay', `${(index % 3) * 70}ms`); });
       document.body.classList.add('motion-ready');
