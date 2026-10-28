@@ -3500,7 +3500,7 @@ router.post('/billing/:id/whatsapp', requireAdminSession, async (req, res) => {
       const parsed = new URL(baseUrl);
       baseUrl = parsed.origin;
     } catch {}
-    const loginLink = `${baseUrl}/customer/login`;
+    const loginLink = `${baseUrl}/customer/signin`;
 
     const comp = company();
     const defaultAutoBilling = `{Halo|Selamat Pagi|Yth.} Pelanggan {{nama}},\n\n{Ini adalah|Berikut} pengingat {sebelum tanggal jatuh tempo|pembayaran tagihan internet} Anda.\n\n📦 *Paket:* {{paket}}\n💰 *Total Tagihan:* Rp {{tagihan}}\n📅 *Periode:* {{rincian}}\n\n{Mohon|Silakan} {segera lakukan|lakukan} pembayaran melalui portal pelanggan: {{link}}\n\n{Terima kasih atas perhatian dan kerja samanya.|Terima kasih.}\nSalam,\nAdmin ${comp}`;
@@ -6575,7 +6575,7 @@ router.post('/api/whatsapp/test-reminder', requireAdminSession, restrictToAdmin,
     // Contoh data supaya admin melihat bentuk pesan yang sesungguhnya.
     const namaContoh = String((req.body && req.body.nama) || 'Pelanggan Uji');
     const baseUrl = String(getSetting('public_base_url', '') || '').replace(/\/+$/, '');
-    const link = baseUrl + '/customer/login';
+    const link = baseUrl + '/customer/signin';
     // Periode contoh = bulan jatuh tempo pelanggan yang hari ini menerima H- ini
     // (mis. 24 September + H-7 -> 1 Oktober -> 10/2026), sama seperti pengingat asli.
     const tempoContoh = cronSvc.tanggalDalamHari(hMinus);

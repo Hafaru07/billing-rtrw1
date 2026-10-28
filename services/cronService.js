@@ -337,7 +337,7 @@ function startCronJobs() {
       return withPort.replace(/\/+$/, '');
     };
 
-    const loginLink = `${resolveBaseUrl()}/customer/login`;
+    const loginLink = `${resolveBaseUrl()}/customer/signin`;
     const baseDelayMs = (Number(getSetting('whatsapp_broadcast_delay', 5) || 5) * 1000); // Default 5 detik
     const batchSize = 15; // 15 pesan per batch (dari 20)
     const batchPauseMs = 120000; // Pause 2 menit setelah batch (dari 1 menit)

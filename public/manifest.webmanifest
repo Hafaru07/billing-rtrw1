@@ -1,7 +1,7 @@
 {
   "name": "Portal Pelanggan",
   "short_name": "Pelanggan",
-  "start_url": "/customer/login?source=pwa",
+  "start_url": "/customer/signin?source=pwa",
   "scope": "/customer/",
   "display": "standalone",
   "orientation": "portrait",

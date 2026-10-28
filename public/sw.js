@@ -1,10 +1,10 @@
-const CACHE_NAME = 'customer-pwa-v1';
+const CACHE_NAME = 'customer-pwa-v2';
 const PRECACHE_URLS = [
   '/css/style.css',
   '/img/logo.png',
   '/img/pwa-icon.svg',
   '/img/hero.png',
-  '/customer/login',
+  '/customer/signin',
   '/customer/register',
   '/customer/tos',
   '/customer/privacy',
@@ -69,7 +69,7 @@ self.addEventListener('fetch', (event) => {
   const path = url.pathname;
 
   if (req.mode === 'navigate' && path.startsWith('/customer/')) {
-    event.respondWith(networkFirst(req, '/customer/login'));
+    event.respondWith(networkFirst(req, '/customer/signin'));
     return;
   }
 

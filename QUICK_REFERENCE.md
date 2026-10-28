@@ -18,7 +18,8 @@ pm2 start app-customer.js --name billing
 | Portal | URL | Default User |
 |--------|-----|---|
 | Admin | `http://localhost:3001/admin/login` | admin / admin123 |
-| Customer | `http://localhost:3001/customer/login` | - |
+| Elround landing | `http://localhost:3001/` atau `/customer/login` | - |
+| Customer sign-in | `http://localhost:3001/customer/signin` | - |
 | Tech | `http://localhost:3001/tech/login` | - |
 | Agent | `http://localhost:3001/agent/login` | - |
 | Collector | `http://localhost:3001/collector/login` | - |

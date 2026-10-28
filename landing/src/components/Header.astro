@@ -1,0 +1,25 @@
+---
+import { company, whatsappUrl } from '../data/site';
+const isHome = Astro.url.pathname === '/';
+const anchor = (id: string) => `${isHome ? '' : '/'}#${id}`;
+---
+<header class="site-header">
+  <div class="container header-inner">
+    <a class="brand" href="/" aria-label="Elround Network, beranda"><img src="/logo-landscape.webp" alt="Elround Network" width="224" height="71" /></a>
+    <nav class="desktop-nav" aria-label="Navigasi utama">
+      <a href="/">Beranda</a>
+      <a href={anchor('paket')}>Paket</a>
+      <a href={anchor('cakupan')}>Coverage</a>
+      <a href={anchor('keunggulan')}>Keunggulan</a>
+      <a href="/tentang-kami/">Tentang kami</a>
+    </nav>
+    <a class="login-link" href={company.portalUrl}>Login</a>
+    <a class="header-action" href={whatsappUrl('Halo Elround Network, saya ingin bertanya tentang layanan internet.')} target="_blank" rel="noopener noreferrer">Hubungi kami</a>
+    <details class="mobile-nav">
+      <summary aria-label="Buka menu navigasi"><span></span><span></span><span></span></summary>
+      <nav aria-label="Navigasi mobile">
+        <a href="/">Beranda</a><a href={anchor('paket')}>Paket</a><a href={anchor('cakupan')}>Coverage</a><a href={anchor('keunggulan')}>Keunggulan</a><a href="/tentang-kami/">Tentang kami</a><a href="/kontak/">Kontak</a>
+      </nav>
+    </details>
+  </div>
+</header>

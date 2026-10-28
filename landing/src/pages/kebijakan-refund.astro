@@ -1,0 +1,9 @@
+---
+import LegalPage from '../components/LegalPage.astro';
+import { company } from '../data/site';
+---
+<LegalPage title="Kebijakan refund" intro="Pembayaran yang sudah terverifikasi bersifat final. Refund hanya dipertimbangkan untuk transaksi ganda akibat kesalahan sistem payment gateway.">
+  <section><h2>Pembayaran yang sudah terverifikasi</h2><p>Setiap pembayaran tagihan internet yang telah berhasil diverifikasi oleh sistem tidak dapat dibatalkan atau dikembalikan. Kebijakan ini berlaku untuk pembayaran layanan sesuai paket dan siklus langganan pelanggan.</p></section>
+  <section><h2>Pengecualian transaksi ganda</h2><p>Pengembalian dana hanya dapat dipertimbangkan jika kesalahan sistem pada payment gateway menyebabkan dua transaksi berhasil untuk satu tagihan yang sama. Tim Elround akan memeriksa catatan tagihan dan transaksi sebelum menentukan pengembalian.</p></section>
+  <section><h2>Cara mengajukan pemeriksaan</h2><p>Kirim nama pelanggan, nomor atau identitas tagihan, tanggal pembayaran, dan kedua bukti transaksi melalui <a href="/kontak/">kontak resmi</a> atau email <a href={`mailto:${company.email}`}>{company.email}</a>. Tim Elround akan memberi informasi hasil pemeriksaan dan langkah pengembalian dana jika transaksi ganda terkonfirmasi.</p></section>
+</LegalPage>

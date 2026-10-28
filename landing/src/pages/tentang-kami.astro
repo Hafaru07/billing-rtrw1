@@ -1,0 +1,20 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import { company, whatsappUrl } from '../data/site';
+---
+<BaseLayout title="Tentang kami" description="Kenali Elround Network, paket broadband rumah, wilayah layanan, dan kemitraan konektivitas dengan PT ION Network.">
+  <div id="top"></div><Header />
+  <main id="main" class="legal-main container">
+    <a class="back-link" href="/">← Kembali ke beranda</a>
+    <h1>Tentang Elround Network</h1>
+    <p class="legal-intro">Pilihan internet broadband untuk rumah, dengan paket dan harga yang mudah dibandingkan.</p>
+    <div class="legal-content">
+      <section><h2>Siapa kami</h2><p>Elround Network adalah layanan broadband dari {company.legalName}. Konektivitas layanan didukung melalui kemitraan dengan {company.partner}.</p><p>Kami menyediakan pilihan paket mulai 15 Mbps sampai 140 Mbps. Harga bulanan dan promo biaya awal ditampilkan di <a href="/#paket">halaman paket</a>.</p></section>
+      <section><h2>Wilayah layanan</h2><p>Kami melayani pengecekan alamat di {company.areas.join(', ')}. Tim Elround akan memeriksa ketersediaan jaringan untuk setiap alamat sebelum pemasangan.</p></section>
+      <section><h2>Cara berlangganan</h2><p>Pilih paket, kirim alamat pemasangan, dan tunggu hasil pengecekan jangkauan. Tim kami akan mengonfirmasi rincian biaya serta jadwal pemasangan.</p></section>
+      <section><h2>Hubungi tim kami</h2><p>Untuk pertanyaan tentang paket, jangkauan, atau layanan yang sedang digunakan, hubungi <a href={whatsappUrl('Halo Elround Network, saya ingin bertanya tentang layanan internet.')} target="_blank" rel="noopener noreferrer">WhatsApp {company.phoneDisplay}</a> atau lihat <a href="/kontak/">halaman kontak</a>.</p></section>
+    </div>
+  </main><Footer />
+</BaseLayout>

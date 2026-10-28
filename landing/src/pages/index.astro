@@ -1,0 +1,101 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import Lightfall from '../components/Lightfall.jsx';
+import { plans, formatRupiah, whatsappUrl, company } from '../data/site';
+---
+<BaseLayout>
+  <div id="top"></div><Header />
+  <main id="main">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-arc hero-arc-one" aria-hidden="true"></div><div class="hero-arc hero-arc-two" aria-hidden="true"></div>
+      <div class="hero-fiber-flow" aria-hidden="true">
+        <Lightfall
+          client:load
+          colors={['#2aafff', '#7cddff', '#e3f8ff']}
+          backgroundColor="#126df4"
+          speed={1.8}
+          streakCount={4}
+          streakWidth={0.7}
+          streakLength={1.7}
+          density={1.2}
+          zoom={2.5}
+          glow={1.05}
+          bloom={0.24}
+          backgroundGlow={0}
+          opacity={0.52}
+          mouseInteraction={false}
+          holdToWarp={false}
+          intro={false}
+          fade={0}
+          dpr={1}
+        />
+      </div>
+      <div class="container hero-grid">
+        <div class="hero-copy">
+          <h1 id="hero-title">Internet<br />tanpa FUP.</h1>
+          <p>Pilih paket broadband 15 sampai 140 Mbps sesuai kebutuhan di rumah. Harga jelas, pilihan lengkap, dan tim kami siap membantu cek jangkauan.</p>
+          <div class="hero-actions"><a class="button button-light" href="#paket">Lihat paket</a><a class="text-link light-link" href="#cakupan">Cek jangkauan <span aria-hidden="true">↗</span></a></div>
+          <div class="hero-bottom"><span>Elround Network</span><span>Konektivitas didukung {company.partner}</span></div>
+        </div>
+        <div class="hero-visual" aria-label="Maskot robot Elround Network">
+          <div class="hero-disc"></div>
+          <img src="/mascots/hero-robot.webp" alt="Maskot robot biru Elround Network" width="700" height="700" fetchpriority="high" />
+        </div>
+      </div>
+    </section>
+
+    <section id="paket" class="plans-section section container" aria-labelledby="plans-title">
+      <div class="section-heading plans-heading"><div><h2 id="plans-title">Paket internet</h2><p>Tujuh pilihan kecepatan untuk penggunaan di rumah, dari chat sehari-hari sampai banyak perangkat sekaligus.</p></div><p class="pricing-note">Harga tercantum per bulan. Konfirmasi promo dan ketersediaan di alamat Anda sebelum berlangganan.</p></div>
+      <div class="plans-list">
+        {plans.map((plan) => <article class:list={['plan-row', `tone-${plan.tone}`, { 'is-featured': !!plan.highlight }]}>
+          <div class="plan-name"><span>{plan.name}</span>{plan.highlight && <span class="plan-highlight">{plan.highlight}</span>}</div>
+          <img class="plan-mascot" src={plan.mascot} alt={`Maskot paket ${plan.name}`} width="130" height="130" loading="lazy" />
+          <div class="plan-speed"><strong>{plan.speed}</strong><span>Mbps</span></div>
+          <div class="plan-detail"><p>{plan.description}</p><p class="plan-offer">{plan.offer}</p></div>
+          <div class="plan-purchase"><p><strong>{formatRupiah(plan.price)}</strong><span>/ bulan</span></p><a href={whatsappUrl(`Halo Elround Network, saya tertarik dengan paket ${plan.name} ${plan.speed} Mbps seharga ${formatRupiah(plan.price)} per bulan. Saya melihat penawaran: ${plan.offer}. Mohon bantu cek jangkauan dan rincian pemasangannya.`)} target="_blank" rel="noopener noreferrer" aria-label={`Tanya paket ${plan.name} melalui WhatsApp`}>Tanya paket</a></div>
+        </article>)}
+      </div>
+      <p class="plans-footnote">Promo biaya awal berlaku sesuai rincian di atas. Kecepatan adalah kecepatan maksimal sesuai paket dan perangkat. Tanyakan ketersediaan jaringan di alamat Anda kepada tim Elround.</p>
+    </section>
+
+    <section id="cakupan" class="coverage-section section" aria-labelledby="coverage-title">
+      <div class="container coverage-grid">
+        <div class="coverage-copy"><h2 id="coverage-title">Cek jangkauan di rumah Anda</h2><p>Kami melayani pengecekan alamat di Banjaratma, Petunjungan, Tegalglagah, Banjarsari, dan Cipugur. Ketersediaan jaringan tetap perlu diperiksa untuk setiap alamat.</p><form id="coverage-form" class="coverage-form" action={whatsappUrl('Halo Elround Network, saya ingin cek jangkauan internet di alamat saya.')} method="get" target="_blank"><label for="address">Alamat atau patokan lokasi</label><div class="coverage-input-row"><input id="address" name="address" type="text" autocomplete="street-address" placeholder="Contoh: nama jalan, RT/RW, kelurahan" required minlength="6" /><button type="submit">Cek via WhatsApp</button></div><p id="coverage-feedback" class="form-help" aria-live="polite">Masukkan alamat agar tim kami dapat mengecek dengan tepat. <a href={whatsappUrl('Halo Elround Network, saya ingin cek jangkauan internet di alamat saya.')} target="_blank" rel="noopener noreferrer">Kirim alamat langsung</a></p></form></div>
+        <div class="coverage-map" id="coverage-map-slot" data-coverage-map aria-label="Wilayah pengecekan layanan Elround Network"><div class="coverage-ring coverage-ring-one"></div><div class="coverage-ring coverage-ring-two"></div><div class="coverage-ring coverage-ring-three"></div><div class="coverage-center"><span class="coverage-dot"></span><strong>Wilayah layanan</strong><ul>{company.areas.map((area) => <li>{area}</li>)}</ul></div><p>Ketersediaan jaringan diperiksa untuk setiap alamat.</p></div>
+      </div>
+    </section>
+
+    <section id="keunggulan" class="advantages-section section container" aria-labelledby="advantages-title">
+      <div class="section-heading advantages-heading"><h2 id="advantages-title">Yang Anda dapatkan</h2><p>Pilihan layanan untuk pemakaian sehari-hari.</p></div>
+      <div class="advantage-layout"><div class="advantage-lead"><p class="big-statement">Internet dipakai bersama, tanpa menghitung sisa kuota.</p><span>No FUP · Unlimited</span></div><div class="advantage-list"><article><h3>Kecepatan sesuai kebutuhan</h3><p>Mulai 15 Mbps untuk browsing ringan hingga 140 Mbps untuk pemakaian yang lebih intensif.</p></article><article><h3>Siap untuk banyak perangkat</h3><p>Tersedia dukungan Wi-Fi dual-band 2,4 GHz dan 5 GHz sesuai paket dan perangkat.</p></article><article><h3>Bantuan dari tim Elround</h3><p>Hubungi tim kami untuk cek jangkauan, memilih paket, atau menanyakan layanan yang sedang digunakan.</p></article></div></div>
+    </section>
+
+    <section id="tentang" class="about-section section" aria-labelledby="about-title"><div class="container about-grid"><div class="about-title-block"><h2 id="about-title">Tentang Elround</h2><div class="about-orbit" aria-hidden="true"><div></div></div></div><div class="about-copy"><p>Elround Network adalah layanan broadband dari PT Elround Lintas Nusantara. Konektivitas kami didukung melalui kemitraan dengan PT ION Network.</p><p>Kami menampilkan pilihan paket dan harga secara terbuka agar Anda bisa memilih kecepatan sesuai pemakaian. Sebelum pemasangan, tim kami akan membantu memeriksa jangkauan di alamat Anda.</p><a class="button button-blue" href="/tentang-kami/">Tentang Elround</a></div></div></section>
+
+    <section id="kontak" class="contact-section section container" aria-labelledby="contact-title"><div><h2 id="contact-title">Siap pasang internet?</h2><p>Tanyakan paket, jangkauan, dan proses pemasangan langsung ke tim kami.</p></div><div class="contact-actions"><a class="button button-blue" href={whatsappUrl('Halo Elround Network, saya ingin bertanya tentang paket dan pemasangan internet.')} target="_blank" rel="noopener noreferrer">Chat via WhatsApp</a><a class="text-link" href="/kontak/">Lihat kontak lengkap <span aria-hidden="true">↗</span></a></div></section>
+  </main>
+  <Footer />
+  <script>
+    if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches && 'IntersectionObserver' in window) {
+      const items = document.querySelectorAll('.section-heading, .plan-row, .coverage-copy h2, .coverage-copy > p, .coverage-map, .advantage-lead, .advantage-list article, .about-title-block, .about-copy, .contact-section > div');
+      items.forEach((item, index) => { item.classList.add('reveal'); (item as HTMLElement).style.setProperty('--reveal-delay', `${(index % 3) * 70}ms`); });
+      document.body.classList.add('motion-ready');
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) { entry.target.classList.add('is-visible'); observer.unobserve(entry.target); }
+        });
+      }, { threshold: 0.08, rootMargin: '0px 0px 50px 0px' });
+      items.forEach((item) => observer.observe(item));
+    }
+    const form = document.querySelector<HTMLFormElement>('#coverage-form');
+    form?.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const field = document.querySelector<HTMLInputElement>('#address');
+      if (!field?.value.trim() || field.value.trim().length < 6) { field?.focus(); return; }
+      const message = `Halo Elround Network, saya ingin cek jangkauan internet di alamat: ${field.value.trim()}. Mohon bantu informasikan ketersediaannya.`;
+      window.open(`https://wa.me/6283899963100?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer');
+    });
+  </script>
+</BaseLayout>

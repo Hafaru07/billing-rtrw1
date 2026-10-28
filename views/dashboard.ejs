@@ -4,13 +4,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title><%= t('customer.dashboard_title', 'Dashboard Pelanggan') %> | Portal ISP</title>
+  <title><%= t('customer.dashboard_title', 'Dashboard Pelanggan') %> | Elround Network</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
   <link rel="stylesheet" href="/css/style.css">
   <link rel="manifest" href="/manifest.webmanifest">
-  <meta name="theme-color" content="#0f172a">
+  <meta name="theme-color" content="#071c49">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -751,14 +751,16 @@
       }
     }
   </style>
+  <link rel="stylesheet" href="/css/customer-dashboard.css">
 </head>
 
-<body>
+<body class="customer-dashboard">
   <!-- NAVBAR -->
   <nav class="navbar navbar-dark shadow-sm">
     <div class="container d-flex justify-content-between align-items-center">
       <span class="navbar-brand">
-        <img src="/img/logo.png" alt="Logo"> <%= t('customer.dashboard.portal', 'Portal Pelanggan') %>
+        <img src="/logo-landscape.webp" alt="Elround Network" width="224" height="71">
+        <span class="portal-label"><%= t('customer.dashboard.portal', 'Portal Pelanggan') %></span>
       </span>
 
       <div class="d-flex align-items-center gap-2">
@@ -775,10 +777,10 @@
         <% } %>
 
         <!-- WEB NOTIFICATION BELL -->
-        <div class="notif-bell-btn" onclick="openNotifDrawer()" title="Notifikasi Pelanggan">
+        <button type="button" class="notif-bell-btn" onclick="openNotifDrawer()" title="Notifikasi Pelanggan" aria-label="Buka notifikasi pelanggan">
           <i class="bi bi-bell-fill"></i>
           <span class="notif-badge-count" id="notifCountBadge" style="display:none">0</span>
-        </div>
+        </button>
 
         <!-- STATUS BADGE -->
         <% if (customer.status === 'Online') { %>
@@ -789,14 +791,14 @@
 
         <!-- RECONNECT INTERNET INSTAN -->
         <form method="POST" action="/customer/reconnect" class="d-inline" title="Refresh & Re-connect Internet Instan">
-          <button type="submit" class="btn btn-success btn-sm fw-bold d-inline-flex align-items-center gap-1 shadow-sm" style="border-radius:10px; padding: 6px 12px; font-size:12px;">
+          <button type="submit" class="btn btn-success btn-sm fw-bold d-inline-flex align-items-center gap-1 shadow-sm" style="border-radius:10px; padding: 6px 12px; font-size:12px;" aria-label="Hubungkan ulang internet">
             <i class="bi bi-arrow-repeat"></i> Re-Connect
           </button>
         </form>
 
         <!-- LOGOUT -->
         <form method="POST" action="/customer/logout" class="d-inline">
-          <button type="submit" class="btn btn-outline-danger btn-sm" style="border-radius:10px; padding: 7px 11px;">
+          <button type="submit" class="btn btn-outline-danger btn-sm" style="border-radius:10px; padding: 7px 11px;" aria-label="Keluar dari akun pelanggan" title="Keluar">
             <i class="bi bi-box-arrow-right"></i>
           </button>
         </form>
@@ -804,7 +806,7 @@
     </div>
   </nav>
 
-  <div class="container mt-4">
+  <main class="container mt-4 dashboard-main">
     <!-- ALERT NOTIFICATION -->
     <% if (typeof notif !== 'undefined' && notif && notif.text) { %>
       <% var nClass = 'alert-' + (notif.type === 'danger' ? 'danger' : notif.type === 'warning' ? 'warning' : notif.type === 'info' ? 'info' : 'success'); %>
@@ -816,14 +818,8 @@
     <% } %>
 
     <!-- PROMO SLIDES CAROUSEL -->
-    <div id="promoCarousel" class="carousel slide carousel-fade mb-4" data-bs-ride="carousel" data-bs-interval="5000" style="border-radius: 20px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.3); border:1px solid var(--card-border);">
-      <div class="carousel-inner">
-        <div class="carousel-item active">
-          <div style="background: linear-gradient(135deg, #6366f1 0%, #3b82f6 100%); aspect-ratio: 16/6; min-height: 110px; display: flex; align-items: center; justify-content: center; color: white; font-size: 18px; font-weight: bold;">
-            <i class="bi bi-wifi me-2"></i><span>Selamat Datang di Portal Pelanggan</span>
-          </div>
-        </div>
-      </div>
+    <div id="promoCarousel" class="carousel slide carousel-fade mb-4" data-bs-ride="carousel" data-bs-interval="5000" style="display:none; border-radius: 20px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.3); border:1px solid var(--card-border);">
+      <div class="carousel-inner"></div>
     </div>
     <script>
       fetch('/customer/api/promo-slides')
@@ -838,6 +834,7 @@
                 </a>
               </div>
             `).join('');
+            document.getElementById('promoCarousel').style.display = 'block';
           }
         }).catch(() => {});
     </script>
@@ -857,13 +854,13 @@
               </span>
             <% } %>
           </div>
-          <h3 class="fw-bold mb-1" style="color:#f8fafc; letter-spacing:-0.02em;">
-            <%= t('customer.dashboard.hello', 'Halo') %>, <%= profile ? profile.name : customer.phone %> 👋
-          </h3>
+          <h1 class="fw-bold mb-1">
+            <%= t('customer.dashboard.hello', 'Halo') %>, <%= profile ? profile.name : customer.phone %>
+          </h1>
           <p class="text-muted small mb-0 d-flex align-items-center gap-2">
-            <span><i class="bi bi-reception-4 text-success"></i> Sinyal Optik: <strong><%= customer.rxPower || '-20 dBm' %></strong></span>
+            <span><i class="bi bi-reception-4 text-success"></i> Sinyal Optik: <strong><%= customer.rxPower || '-' %></strong></span>
             <span>•</span>
-            <span><i class="bi bi-hdd-network text-info"></i> <%= customer.pppoeUsername || 'PPPoE Active' %></span>
+            <span><i class="bi bi-hdd-network text-info"></i> <%= customer.pppoeUsername || '-' %></span>
           </p>
         </div>
 
@@ -920,37 +917,37 @@
     <!-- QUICK ACTION DOCK (6 ICONS) -->
     <div class="action-grid">
       <% const navPayAmt = hasUnpaid ? totalUnpaidAmount : 0; %>
-      <div class="action-item" onclick="<%= hasUnpaid ? `openPaymentModal('${latestUnpaid.id}', '${navPayAmt}')` : `location.href='#billing-section'` %>">
+      <button type="button" class="action-item" onclick="<%= hasUnpaid ? `openPaymentModal('${latestUnpaid.id}', '${navPayAmt}')` : `location.href='#billing-section'` %>">
         <div class="action-icon ai-pay"><i class="bi bi-credit-card-2-front-fill"></i></div>
         <div class="action-label">Bayar Tagihan</div>
-      </div>
-      <div class="action-item" onclick="editSsid()">
+      </button>
+      <button type="button" class="action-item" onclick="editSsid()">
         <div class="action-icon ai-ssid"><i class="bi bi-wifi"></i></div>
         <div class="action-label">Nama WiFi</div>
-      </div>
-      <div class="action-item" onclick="editPassword()">
+      </button>
+      <button type="button" class="action-item" onclick="editPassword()">
         <div class="action-icon ai-pass"><i class="bi bi-key-fill"></i></div>
         <div class="action-label">Sandi WiFi</div>
-      </div>
-      <div class="action-item" onclick="rebootDevice('<%= (customer.tags && customer.tags[0]) || customer.id %>')">
+      </button>
+      <button type="button" class="action-item" onclick="rebootDevice('<%= (customer.tags && customer.tags[0]) || customer.id %>')">
         <div class="action-icon ai-reboot"><i class="bi bi-arrow-clockwise"></i></div>
         <div class="action-label">Restart Modem</div>
-      </div>
+      </button>
       <% if (showPPOB) { %>
       <a href="/customer/ppob" class="action-item">
         <div class="action-icon ai-ppob"><i class="bi bi-lightning-charge-fill"></i></div>
         <div class="action-label">Pulsa & PPOB</div>
       </a>
       <% } else { %>
-      <div class="action-item" onclick="openNotifDrawer()">
+      <button type="button" class="action-item" onclick="openNotifDrawer()">
         <div class="action-icon ai-ppob"><i class="bi bi-bell-fill"></i></div>
         <div class="action-label">Notifikasi</div>
-      </div>
+      </button>
       <% } %>
-      <div class="action-item" onclick="const m = new bootstrap.Modal(document.getElementById('ticketModal')); m.show();">
+      <button type="button" class="action-item" onclick="const m = new bootstrap.Modal(document.getElementById('ticketModal')); m.show();">
         <div class="action-icon ai-ticket"><i class="bi bi-headset"></i></div>
         <div class="action-label">Bantuan / Tiket</div>
-      </div>
+      </button>
     </div>
 
     <!-- MAIN DEVICE & TRAFFIC MONITORING GRID -->
@@ -1068,28 +1065,28 @@
               <div class="col-6">
                 <div class="stat-label" style="color:#cbd5e1; font-weight:600;">Trafik Download</div>
                 <div class="traffic-gauge">
-                  <canvas id="pppoe_rx_gauge" width="220" height="140" data-max="<%= typeof trafficMaxDownMbps !== 'undefined' ? trafficMaxDownMbps : 10 %>"></canvas>
+                  <canvas id="traffic_download_gauge" width="220" height="140" data-max="<%= typeof trafficMaxDownMbps !== 'undefined' ? trafficMaxDownMbps : 10 %>"></canvas>
                   <div class="traffic-gauge-center">
-                    <div class="traffic-gauge-value" id="pppoe_rx_value">-</div>
-                    <div class="traffic-gauge-unit" id="pppoe_rx_unit">&nbsp;</div>
+                    <div class="traffic-gauge-value" id="traffic_download_value">-</div>
+                    <div class="traffic-gauge-unit" id="traffic_download_unit">&nbsp;</div>
                   </div>
                   <div class="traffic-gauge-scale" style="color:#cbd5e1;">
                     <span>0</span>
-                    <span id="pppoe_rx_max"><%= typeof trafficMaxDownMbps !== 'undefined' ? trafficMaxDownMbps : 10 %> Mbps</span>
+                    <span id="traffic_download_max"><%= typeof trafficMaxDownMbps !== 'undefined' ? trafficMaxDownMbps : 10 %> Mbps</span>
                   </div>
                 </div>
               </div>
               <div class="col-6">
                 <div class="stat-label" style="color:#cbd5e1; font-weight:600;">Trafik Upload</div>
                 <div class="traffic-gauge">
-                  <canvas id="pppoe_tx_gauge" width="220" height="140" data-max="<%= typeof trafficMaxUpMbps !== 'undefined' ? trafficMaxUpMbps : 10 %>"></canvas>
+                  <canvas id="traffic_upload_gauge" width="220" height="140" data-max="<%= typeof trafficMaxUpMbps !== 'undefined' ? trafficMaxUpMbps : 10 %>"></canvas>
                   <div class="traffic-gauge-center">
-                    <div class="traffic-gauge-value" id="pppoe_tx_value">-</div>
-                    <div class="traffic-gauge-unit" id="pppoe_tx_unit">&nbsp;</div>
+                    <div class="traffic-gauge-value" id="traffic_upload_value">-</div>
+                    <div class="traffic-gauge-unit" id="traffic_upload_unit">&nbsp;</div>
                   </div>
                   <div class="traffic-gauge-scale" style="color:#cbd5e1;">
                     <span>0</span>
-                    <span id="pppoe_tx_max"><%= typeof trafficMaxUpMbps !== 'undefined' ? trafficMaxUpMbps : 10 %> Mbps</span>
+                    <span id="traffic_upload_max"><%= typeof trafficMaxUpMbps !== 'undefined' ? trafficMaxUpMbps : 10 %> Mbps</span>
                   </div>
                 </div>
               </div>
@@ -1129,7 +1126,8 @@
                   <% if (invoices && invoices.length > 0) { %>
                     <% invoices.forEach(inv => { %>
                       <% const itemAmt = inv.amount != null ? inv.amount : (inv.package_price != null ? inv.package_price : 0); %>
-                            <td class="text-start" style="white-space:nowrap; padding:12px 14px;">
+                      <tr>
+                        <td class="text-start" style="white-space:nowrap; padding:12px 14px;">
                           <% if (inv.status !== 'paid') { %>
                             <button class="btn btn-sm text-dark fw-bold shadow-sm" onclick="openPaymentModal('<%= inv.id %>', '<%= itemAmt %>')" style="background: linear-gradient(135deg, #f59e0b, #fbbf24); border:none; border-radius:8px; padding: 7px 14px; font-size:12px; display:inline-flex; align-items:center; gap:6px;">
                               <i class="bi bi-qr-code-scan" style="font-size:15px; color:#0f172a;"></i> <span>Bayar</span>
@@ -1276,7 +1274,7 @@
         </div>
       </div>
     </div>
-  </div>
+  </main>
 
   <!-- PAYMENT METHODS MODAL -->
   <div class="modal fade" id="paymentModal" tabindex="-1" aria-hidden="true">
@@ -1814,7 +1812,7 @@
       ctx.beginPath();
       ctx.arc(cx, cy, radius, Math.PI, 2 * Math.PI, false);
       ctx.lineWidth = 14;
-      ctx.strokeStyle = 'rgba(30, 41, 59, 0.8)';
+      ctx.strokeStyle = '#d7e5f6';
       ctx.lineCap = 'round';
       ctx.stroke();
 
@@ -1839,27 +1837,28 @@
         if (!res.ok) return;
         const data = await res.json();
 
-        const rxGauge = document.getElementById('pppoe_rx_gauge');
-        const txGauge = document.getElementById('pppoe_tx_gauge');
+        const downloadGauge = document.getElementById('traffic_download_gauge');
+        const uploadGauge = document.getElementById('traffic_upload_gauge');
 
-        const maxDown = parseFloat(rxGauge?.dataset?.max) || 10;
-        const maxUp = parseFloat(txGauge?.dataset?.max) || 10;
+        const maxDown = parseFloat(downloadGauge?.dataset?.max) || 10;
+        const maxUp = parseFloat(uploadGauge?.dataset?.max) || 10;
 
-        const rx = parseFloat(data.rxMbps || data.rx_rate || 0) || 0;
-        const tx = parseFloat(data.txMbps || data.tx_rate || 0) || 0;
+        // Arah trafik pada antarmuka PPPoE dilihat dari router; arah pelanggan berlawanan.
+        const download = parseFloat(data.txMbps ?? data.tx_rate ?? 0) || 0;
+        const upload = parseFloat(data.rxMbps ?? data.rx_rate ?? 0) || 0;
 
-        const rxValEl = document.getElementById('pppoe_rx_value');
-        const rxUnitEl = document.getElementById('pppoe_rx_unit');
-        if (rxValEl) rxValEl.innerText = rx < 0.1 ? (rx * 1000).toFixed(0) : rx.toFixed(2);
-        if (rxUnitEl) rxUnitEl.innerText = rx < 0.1 ? 'Kbps' : 'Mbps';
+        const downloadValEl = document.getElementById('traffic_download_value');
+        const downloadUnitEl = document.getElementById('traffic_download_unit');
+        if (downloadValEl) downloadValEl.innerText = download < 0.1 ? (download * 1000).toFixed(0) : download.toFixed(2);
+        if (downloadUnitEl) downloadUnitEl.innerText = download < 0.1 ? 'Kbps' : 'Mbps';
 
-        const txValEl = document.getElementById('pppoe_tx_value');
-        const txUnitEl = document.getElementById('pppoe_tx_unit');
-        if (txValEl) txValEl.innerText = tx < 0.1 ? (tx * 1000).toFixed(0) : tx.toFixed(2);
-        if (txUnitEl) txUnitEl.innerText = tx < 0.1 ? 'Kbps' : 'Mbps';
+        const uploadValEl = document.getElementById('traffic_upload_value');
+        const uploadUnitEl = document.getElementById('traffic_upload_unit');
+        if (uploadValEl) uploadValEl.innerText = upload < 0.1 ? (upload * 1000).toFixed(0) : upload.toFixed(2);
+        if (uploadUnitEl) uploadUnitEl.innerText = upload < 0.1 ? 'Kbps' : 'Mbps';
 
-        drawGauge('pppoe_rx_gauge', rx, maxDown, '#06b6d4');
-        drawGauge('pppoe_tx_gauge', tx, maxUp, '#10b981');
+        drawGauge('traffic_download_gauge', download, maxDown, '#126df4');
+        drawGauge('traffic_upload_gauge', upload, maxUp, '#0086ef');
       } catch (e) {
         console.error('[Traffic] Fetch error:', e);
       }

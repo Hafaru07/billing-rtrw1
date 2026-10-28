@@ -1,0 +1,17 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Header from './Header.astro';
+import Footer from './Footer.astro';
+const { title, intro, draft = false } = Astro.props;
+---
+<BaseLayout title={title} description={`${title} Elround Network. Informasi layanan untuk pelanggan broadband.`}>
+  <div id="top"></div><Header />
+  <main id="main" class="legal-main container">
+    <a class="back-link" href="/">← Kembali ke beranda</a>
+    <h1>{title}</h1>
+    <p class="legal-intro">{intro}</p>
+    {draft && <div class="draft-notice" role="note"><strong>Informasi untuk ditinjau.</strong> Rincian masa penyimpanan data dan pihak pemroses perlu dicocokkan dengan sistem operasional Elround sebelum kebijakan ini diberlakukan.</div>}
+    <div class="legal-content"><slot /></div>
+  </main>
+  <Footer />
+</BaseLayout>

@@ -1,0 +1,20 @@
+{
+  "name": "elround-net",
+  "version": "1.0.0",
+  "description": "Website Elround Network berbasis Astro",
+  "scripts": {
+    "dev": "astro dev --host 127.0.0.1",
+    "build": "astro build",
+    "preview": "astro preview --host 127.0.0.1",
+    "check": "astro check"
+  },
+  "type": "module",
+  "dependencies": {
+    "@astrojs/react": "^7.1.1",
+    "@tailwindcss/vite": "^4.3.3",
+    "astro": "^7.4.2",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwindcss": "^4.3.3"
+  }
+}

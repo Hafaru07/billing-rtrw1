@@ -1,0 +1,17 @@
+---
+import { company, whatsappUrl } from '../data/site';
+---
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-top">
+      <a class="footer-logo" href="/" aria-label="Elround Network, kembali ke beranda"><img src="/logo-landscape.webp" alt="Elround Network" width="224" height="71" loading="lazy" /></a>
+      <p class="footer-copy">Internet rumah dengan pilihan kecepatan yang jelas. Cek jangkauan, pilih paket, lalu bicara langsung dengan tim kami.</p>
+    </div>
+    <div class="footer-links">
+      <div><h2>Jelajahi</h2><a href="/#paket">Paket internet</a><a href="/#cakupan">Coverage</a><a href="/#keunggulan">Keunggulan</a><a href="/tentang-kami/">Tentang kami</a></div>
+      <div><h2>Informasi</h2><a href="/kontak/">Kontak</a><a href="/ketentuan-layanan/">Ketentuan layanan</a><a href="/kebijakan-privasi/">Kebijakan privasi</a><a href="/kebijakan-refund/">Kebijakan refund</a></div>
+      <div><h2>Hubungi</h2><a href={whatsappUrl('Halo Elround Network, saya ingin bertanya tentang layanan internet.')} target="_blank" rel="noopener noreferrer">WhatsApp {company.phoneDisplay}</a><a href={`mailto:${company.email}`}>{company.email}</a><a href={company.instagram} target="_blank" rel="noopener noreferrer">Instagram {company.instagramDisplay}</a><p>{company.address}</p></div>
+    </div>
+    <div class="footer-bottom"><span>© {new Date().getFullYear()} {company.name}. Konektivitas didukung melalui kemitraan dengan {company.partner}.</span><a href="#top">Kembali ke atas ↑</a></div>
+  </div>
+</footer>

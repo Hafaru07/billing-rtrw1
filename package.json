@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node app-customer.js",
     "dev": "nodemon app-customer.js",
+    "build:landing": "npm --prefix landing run build",
     "postinstall": "echo 'Install complete. If you used sudo, run: sudo chown -R $USER:$USER .'",
     "fix-permissions": "sudo chown -R $USER:$USER ."
   },

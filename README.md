@@ -217,14 +217,16 @@ Port mengikuti **`server_port`** di `settings.json` (default **3001**). Ganti `[
 
 | Portal | URL contoh |
 |--------|------------|
-| Beranda | `http://[IP-SERVER]:3001/` → mengarah ke login pelanggan |
-| Pelanggan | `http://[IP-SERVER]:3001/customer/login` (alias singkat: `/login`) |
+| Beranda Elround | `http://[IP-SERVER]:3001/` atau `/customer/login` |
+| Login pelanggan | `http://[IP-SERVER]:3001/customer/signin` (alias singkat: `/login`) |
 | Admin | `http://[IP-SERVER]:3001/admin/login` |
 | Teknisi | `http://[IP-SERVER]:3001/tech/login` |
 | Agen | `http://[IP-SERVER]:3001/agent/login` |
 | Kolektor | `http://[IP-SERVER]:3001/collector/login` |
 | Health check | `http://[IP-SERVER]:3001/health` |
 | **Download APK Android** | `http://[IP-SERVER]:3001/downloads/billing-rtrw.apk` |
+
+Sumber landing page Astro berada di `landing/`. Setelah mengubahnya, jalankan `npm --prefix landing ci` sekali untuk memasang dependensi, lalu `npm run build:landing`. Hasil build di `public/landing/` dilayani oleh server yang sama. Harga dan promo pada landing page masih berasal dari `landing/src/data/site.ts`, belum dari database billing.
 
 Kredensial admin **awal** biasanya sesuai `admin_username` / `admin_password` di `settings.json` (contoh bawaan sering `admin` / `admin123`) — **wajib diganti** sebelum dipakai publik.
 

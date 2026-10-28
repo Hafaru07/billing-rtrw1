@@ -1,0 +1,12 @@
+---
+import LegalPage from '../components/LegalPage.astro';
+import { company } from '../data/site';
+---
+<LegalPage title="Ketentuan layanan" intro="Syarat penggunaan internet Elround Network, pembayaran, isolir, dan penanganan gangguan.">
+  <section><h2>Penyedia dan layanan</h2><p>Elround Network menyediakan akses internet broadband kepada pelanggan sesuai paket yang dipilih. Layanan disampaikan oleh {company.legalName} dengan konektivitas yang didukung melalui kemitraan dengan {company.partner}. Kualitas koneksi dapat dipengaruhi faktor teknis, lokasi geografis, perangkat, dan kondisi cuaca ekstrem.</p></section>
+  <section><h2>Paket, jangkauan, dan pemasangan</h2><p>Harga paket di situs adalah biaya bulanan. Promo biaya pemasangan dan biaya bulan pertama ditampilkan pada masing-masing paket. Ketersediaan layanan di Banjaratma, Petunjungan, Tegalglagah, Banjarsari, dan Cipugur tetap diperiksa berdasarkan alamat pemasangan. Tim Elround mengonfirmasi rincian biaya dan jadwal sebelum pemasangan dilakukan.</p></section>
+  <section><h2>Pembayaran dan tagihan</h2><p>Sistem menerbitkan tagihan internet setiap bulan sesuai siklus langganan pelanggan. Pembayaran dapat dilakukan secara mandiri melalui Portal Pelanggan dengan metode QRIS, Virtual Account, atau Retail Outlet yang tersedia. Pembayaran yang telah berhasil diverifikasi sistem bersifat final dan tidak dapat dibatalkan atau dikembalikan, kecuali transaksi ganda untuk satu tagihan akibat kesalahan sistem payment gateway sebagaimana dijelaskan dalam <a href="/kebijakan-refund/">kebijakan refund</a>.</p></section>
+  <section><h2>Isolir sementara</h2><p>Jika tagihan belum dilunasi setelah jatuh tempo, sistem akan mengisolir layanan sementara secara otomatis. Layanan aktif kembali setelah pembayaran terverifikasi oleh sistem.</p></section>
+  <section><h2>Penggunaan dan tanggung jawab</h2><p>Pelanggan bertanggung jawab menggunakan layanan sesuai hukum serta menjaga keamanan jaringan dan perangkatnya. Elround Network tidak bertanggung jawab atas kerugian yang disebabkan gangguan teknis penyedia hulu, kerusakan perangkat akibat kelalaian pelanggan, atau keadaan kahar (force majeure).</p></section>
+  <section><h2>Kontak</h2><p>Pertanyaan tentang tagihan, isolir, gangguan, atau layanan dapat disampaikan melalui <a href="/kontak/">halaman kontak</a> atau email <a href={`mailto:${company.email}`}>{company.email}</a>.</p></section>
+</LegalPage>

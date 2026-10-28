@@ -445,7 +445,7 @@ router.get('/qris/static.jpg', async (req, res) => {
   const sendPretty = (status, title, detail) => {
     if (!wantsHtml()) return res.status(status).send(title);
     const baseUrl = getBaseUrl(req, getSettingsWithCache());
-    const loginLink = `${baseUrl}/customer/login`;
+    const loginLink = `${baseUrl}/customer/signin`;
     res.set('Content-Type', 'text/html; charset=utf-8');
     return res.status(status).send(`<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>body{font-family:system-ui,Segoe UI,Arial; margin:0; background:#0b1220; color:#e5e7eb} .wrap{max-width:520px;margin:0 auto;padding:24px} .card{background:#0f172a;border:1px solid rgba(148,163,184,.18);border-radius:14px;padding:18px} h1{font-size:18px;margin:0 0 8px} p{margin:0 0 12px;color:#cbd5e1;line-height:1.45} a{display:inline-block;background:#1d4ed8;color:#fff;text-decoration:none;padding:10px 14px;border-radius:10px}</style></head><body><div class="wrap"><div class="card"><h1>${title}</h1><p>${detail || ''}</p><a href="${loginLink}">Buka Portal Pelanggan</a></div></div></body></html>`);
   };
@@ -778,12 +778,15 @@ router.get('/', (req, res) => {
 });
 
 router.get('/login', (req, res) => {
-  if (req.session && req.session.customer) {
+  res.sendFile(path.join(__dirname, '..', 'public', 'landing', 'index.html'));
+});
+
+router.get('/signin', (req, res) => {
+  if (req.session && (req.session.customer || req.session.phone)) {
     return res.redirect('/customer/dashboard');
   }
   const settings = getSettingsWithCache();
-  const packages = customerSvc.getAllPackages().filter(p => p.is_active !== 0);
-  res.render('login', { error: null, settings, packages });
+  res.render('login', { error: null, settings });
 });
 
 router.get('/check-billing', async (req, res) => {
@@ -1590,15 +1593,14 @@ router.post('/register', async (req, res) => {
   }
 });
 
-router.post('/login', loginRateLimiter, async (req, res) => {
+router.post(['/login', '/signin'], loginRateLimiter, async (req, res) => {
   const { phone, password } = req.body;
   const settings = getSettingsWithCache();
   const authenticated = customerPortalAuth.authenticate(phone, password);
   if (!authenticated) {
-    const packages = customerSvc.getAllPackages().filter(p => p.is_active !== 0);
     return res.status(401).render('login', {
       error: 'Nomor WhatsApp atau password salah. Hubungi admin jika belum memiliki password portal.',
-      settings, packages
+      settings
     });
   }
   const startTime = Date.now();
@@ -1673,11 +1675,9 @@ router.post('/login', loginRateLimiter, async (req, res) => {
   // 3. Tahap 3: Verifikasi Akhir
   if (!device && !customer) {
     logger.warn('[Login] Gagal: pelanggan tidak ditemukan.');
-    const packages = customerSvc.getAllPackages().filter(p => p.is_active !== 0);
     return res.render('login', {
       error: 'Data pelanggan tidak ditemukan. Pastikan nomor WhatsApp sudah benar.',
-      settings,
-      packages
+      settings
     });
   }
 
@@ -1724,8 +1724,7 @@ router.post('/login', loginRateLimiter, async (req, res) => {
         logger.info('[Login] OTP dikirim via WhatsApp.');
       } catch (e) {
         logger.error(`[Login] Gagal kirim OTP via WhatsApp: ${e.message}`);
-        const packages = customerSvc.getAllPackages().filter(p => p.is_active !== 0);
-        return res.render('login', { error: e.message, settings, packages });
+        return res.render('login', { error: e.message, settings });
       }
     }
 
@@ -1746,7 +1745,7 @@ router.post('/login', loginRateLimiter, async (req, res) => {
 
 router.get('/login-otp', (req, res) => {
   const settings = getSettingsWithCache();
-  if (!req.session.pending_login) return res.redirect('/customer/login');
+  if (!req.session.pending_login) return res.redirect('/customer/signin');
   res.render('login_otp', { error: null, settings, phone: req.session.pending_login.phone });
 });
 
@@ -1755,12 +1754,11 @@ router.post('/login-otp', loginRateLimiter, (req, res) => {
   const settings = getSettingsWithCache();
   const pending = req.session.pending_login;
 
-  if (!pending) return res.redirect('/customer/login');
+  if (!pending) return res.redirect('/customer/signin');
 
   if (Date.now() > pending.expiry) {
     delete req.session.pending_login;
-    const packages = customerSvc.getAllPackages().filter(p => p.is_active !== 0);
-    return res.render('login', { error: 'Kode OTP telah kadaluarsa. Silakan login kembali.', settings, packages });
+    return res.render('login', { error: 'Kode OTP telah kadaluarsa. Silakan login kembali.', settings });
   }
 
   if (otp === pending.otp) {
@@ -1789,7 +1787,7 @@ router.use((req, res, next) => {
 
   if (req.session?.phone && (!req.session.customerId ||
       req.session.portalAuthVersion !== customerPortalAuth.getAuthVersion(req.session.customerId))) {
-    return req.session.destroy(() => res.redirect('/customer/login'));
+    return req.session.destroy(() => res.redirect('/customer/signin'));
   }
 
   if (isSuspendedPortalExemptPath(req.path)) return next();
@@ -1807,7 +1805,7 @@ router.get('/dashboard', async (req, res) => {
   logger.info(`[Dashboard] Session ID: ${req.sessionID}, Phone: ${req.session?.phone || 'TIDAK ADA'}, PPPoE: ${req.session?.pppoe_username || 'TIDAK ADA'}`);
   
   const loginId = req.session && req.session.phone;
-  if (!loginId) return res.redirect('/customer/login');
+  if (!loginId) return res.redirect('/customer/signin');
   
   // Flash message
   let msgNotif = null;
@@ -2253,7 +2251,7 @@ async function prosesGantiWifi(req, res, jenis) {
   if (!loginId) {
     return mintaBalasanJson(req)
       ? res.status(401).json({ ok: false, status: 'unauthorized', message: 'Sesi Anda sudah berakhir. Silakan login ulang.' })
-      : res.redirect('/customer/login');
+      : res.redirect('/customer/signin');
   }
 
   const band = jenis === 'password' ? String(req.body?.band || '2.4G') : null;
@@ -2352,7 +2350,7 @@ router.post('/reboot', async (req, res) => {
   if (!loginId) {
     return mintaBalasanJson(req)
       ? res.status(401).json({ ok: false, status: 'unauthorized', message: 'Sesi Anda sudah berakhir. Silakan login ulang.' })
-      : res.redirect('/customer/login');
+      : res.redirect('/customer/signin');
   }
 
   const tolak = tolakBilaSibuk(loginId, 'reboot');
@@ -2454,7 +2452,7 @@ router.get('/api/device/sync-status', async (req, res) => {
 router.post('/change-tag', async (req, res) => {
   const oldTag = req.session && req.session.phone;
   const newTag = (req.body.newTag || '').trim();
-  if (!oldTag) return res.redirect('/customer/login');
+  if (!oldTag) return res.redirect('/customer/signin');
   const settings = getSettingsWithCache();
 
   if (!newTag || newTag === oldTag) {
@@ -2535,7 +2533,7 @@ router.post('/change-tag', async (req, res) => {
 
 router.post('/logout', (req, res) => {
   req.session.destroy(() => {
-    res.redirect('/customer/login');
+    res.redirect('/customer/signin');
   });
 });
 
@@ -2802,7 +2800,7 @@ router.post('/public/payment/create/:invoiceId', async (req, res) => {
 // ─── TICKETS / KELUHAN ─────────────────────────────────────────────────────
 router.post('/tickets/create', uploadCustomer.array('photos', 5), async (req, res) => {
   const loginId = req.session && req.session.phone;
-  if (!loginId) return res.redirect('/customer/login');
+  if (!loginId) return res.redirect('/customer/signin');
   
   const profile = findCustomerProfileByLoginId(loginId) ||
     (req.session.pppoe_username ? findCustomerProfileByLoginId(req.session.pppoe_username) : null);
@@ -2944,7 +2942,7 @@ router.get('/payment/create/:invoiceId', async (req, res) => {
   
   // CHECK 1: Session login
   if (!loginId && !publicToken) {
-    return res.redirect('/customer/login');
+    return res.redirect('/customer/signin');
   }
   
   try {
@@ -3698,13 +3696,13 @@ router.get('/ppob', (req, res) => {
   
   if (!req.session.phone) {
     logger.warn('[PPOB] Session phone tidak ditemukan, redirect ke login');
-    return res.redirect('/customer/login?next=/customer/ppob');
+    return res.redirect('/customer/signin?next=/customer/ppob');
   }
 
   const customer = customerSvc.findCustomerByAny(req.session.phone);
   if (!customer) {
     logger.warn('[PPOB] Customer tidak ditemukan untuk phone: ' + req.session.phone);
-    return res.redirect('/customer/login');
+    return res.redirect('/customer/signin');
   }
 
   // Get category filter from URL parameter
@@ -3753,7 +3751,7 @@ router.post('/ppob/buy', express.urlencoded({ extended: true }), async (req, res
     return res.redirect('/customer');
   }
   const redirectErr = (msg) => res.redirect('/customer/ppob?err=' + encodeURIComponent(msg));
-  if (!req.session.phone) return res.redirect('/customer/login');
+  if (!req.session.phone) return res.redirect('/customer/signin');
 
   const customer = customerSvc.findCustomerByAny(req.session.phone);
   if (!customer) return redirectErr('Sesi tidak valid, silakan login ulang.');
@@ -3839,9 +3837,9 @@ router.get('/topup', async (req, res) => {
     return res.redirect('/customer');
   }
   const settings = getSettingsWithCache();
-  if (!req.session.phone) return res.redirect('/customer/login?next=/customer/topup');
+  if (!req.session.phone) return res.redirect('/customer/signin?next=/customer/topup');
   const customer = customerSvc.findCustomerByAny(req.session.phone);
-  if (!customer) return res.redirect('/customer/login');
+  if (!customer) return res.redirect('/customer/signin');
 
   let paymentChannels = [];
   try {
@@ -3906,7 +3904,7 @@ router.post('/topup/create', express.urlencoded({ extended: true }), async (req,
   }
   const settings = getSettingsWithCache();
   const redirectErr = (msg) => res.redirect('/customer/topup?err=' + encodeURIComponent(msg));
-  if (!req.session.phone) return res.redirect('/customer/login');
+  if (!req.session.phone) return res.redirect('/customer/signin');
   const customer = customerSvc.findCustomerByAny(req.session.phone);
   if (!customer) return redirectErr('Sesi tidak valid');
 
@@ -4071,7 +4069,7 @@ router.post('/customer/reconnect', async (req, res) => {
       if (req.xhr || req.headers.accept?.includes('json')) {
         return res.status(401).json({ success: false, message: 'Silakan login terlebih dahulu' });
       }
-      return res.redirect('/customer/login');
+      return res.redirect('/customer/signin');
     }
 
     const customer = customerSvc.findCustomerByAny(sessionPhone);

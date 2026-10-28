@@ -1182,14 +1182,14 @@ app.get('/health', (req, res) => {
     });
 });
 
-// Redirect root ke portal pelanggan
+// Tampilkan landing page Elround di domain utama.
 app.get('/', (req, res) => {
-  res.redirect('/customer/login');
+  res.sendFile(path.join(__dirname, 'public', 'landing', 'index.html'));
 });
 
-// Alias singkat: /login → /customer/login
+// Alias singkat untuk formulir login pelanggan.
 app.get('/login', (req, res) => {
-  res.redirect('/customer/login');
+  res.redirect('/customer/signin');
 });
 
 // Halaman Isolir (Akses langsung dari redirect MikroTik) - dengan integrasi pembayaran otomatis
@@ -1627,6 +1627,7 @@ app.get('/admin/manifest.webmanifest', (req, res) => {
   });
 });
 app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public', 'landing')));
 
 // Route: Kebijakan Privasi (Privacy Policy) untuk Google Play Store
 app.get(['/privacy-policy', '/privacy', '/kebijakan-privasi', '/privacy.html'], (req, res) => {
@@ -1677,7 +1678,7 @@ app.get('/uploads/qris/:filename', async (req, res) => {
   const sendPretty = (status, title, detail) => {
     if (!wantsHtml()) return res.status(status).send(title);
     const baseUrl = String(getSetting('app_url', '') || `${req.headers['x-forwarded-proto'] || req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
-    const loginLink = `${baseUrl}/customer/login`;
+    const loginLink = `${baseUrl}/customer/signin`;
     res.set('Content-Type', 'text/html; charset=utf-8');
     return res.status(status).send(`<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>body{font-family:system-ui,Segoe UI,Arial; margin:0; background:#0b1220; color:#e5e7eb} .wrap{max-width:520px;margin:0 auto;padding:24px} .card{background:#0f172a;border:1px solid rgba(148,163,184,.18);border-radius:14px;padding:18px} h1{font-size:18px;margin:0 0 8px} p{margin:0 0 12px;color:#cbd5e1;line-height:1.45} a{display:inline-block;background:#1d4ed8;color:#fff;text-decoration:none;padding:10px 14px;border-radius:10px}</style></head><body><div class="wrap"><div class="card"><h1>${title}</h1><p>${detail || ''}</p><a href="${loginLink}">Buka Portal Pelanggan</a></div></div></body></html>`);
   };
@@ -1716,7 +1717,7 @@ app.get('/qris/static.jpg', async (req, res) => {
   const sendPretty = (status, title, detail) => {
     if (!wantsHtml()) return res.status(status).send(title);
     const baseUrl = String(getSetting('app_url', '') || `${req.headers['x-forwarded-proto'] || req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
-    const loginLink = `${baseUrl}/customer/login`;
+    const loginLink = `${baseUrl}/customer/signin`;
     res.set('Content-Type', 'text/html; charset=utf-8');
     return res.status(status).send(`<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>body{font-family:system-ui,Segoe UI,Arial; margin:0; background:#0b1220; color:#e5e7eb} .wrap{max-width:520px;margin:0 auto;padding:24px} .card{background:#0f172a;border:1px solid rgba(148,163,184,.18);border-radius:14px;padding:18px} h1{font-size:18px;margin:0 0 8px} p{margin:0 0 12px;color:#cbd5e1;line-height:1.45} a{display:inline-block;background:#1d4ed8;color:#fff;text-decoration:none;padding:10px 14px;border-radius:10px}</style></head><body><div class="wrap"><div class="card"><h1>${title}</h1><p>${detail || ''}</p><a href="${loginLink}">Buka Portal Pelanggan</a></div></div></body></html>`);
   };

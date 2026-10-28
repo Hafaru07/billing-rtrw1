@@ -495,7 +495,7 @@ function renderTemplateMessage(template, customer, invoice = null) {
   const settings = getSettingsWithCache();
   const comp = settings.company_header || 'ALIJAYA NET';
   const base = settings.public_base_url || settings.app_url || `http://localhost:${settings.port || 3001}`;
-  const link = `${base}/customer/login?u=${encodeURIComponent(customer.pppoe_username || customer.phone || '')}`;
+  const link = `${base}/customer/signin?u=${encodeURIComponent(customer.pppoe_username || customer.phone || '')}`;
 
   const pkgName = customer.package_name || customer.packageName || 'Paket Internet';
   const billAmount = invoice ? Number(invoice.amount || 0) : Number(customer.package_price || 0);

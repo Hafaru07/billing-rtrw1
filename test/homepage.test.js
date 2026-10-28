@@ -5,7 +5,7 @@ const path = require('node:path');
 const ejs = require('ejs');
 
 const template = path.join(__dirname, '../views/login.ejs');
-const stylesheet = path.join(__dirname, '../public/css/homepage.css');
+const landingDir = path.join(__dirname, '../public/landing');
 
 function render(overrides = {}) {
   return ejs.renderFile(template, {
@@ -15,45 +15,46 @@ function render(overrides = {}) {
       login_otp_enabled: false,
       ...overrides.settings
     },
-    packages: overrides.packages ?? [
-      { name: 'Home Pro', speed_down: 50000, price: 150000 },
-      { name: 'Home Basic', speed_down: 30000, price: 100000 }
-    ],
     error: overrides.error ?? null,
     lang: 'id',
     t: (_key, fallback) => fallback
   });
 }
 
-test('homepage renders the portal form and customer routes', async () => {
+test('landing page includes the customer sign-in link and built assets', () => {
+  const html = fs.readFileSync(path.join(landingDir, 'index.html'), 'utf8');
+  assert.match(html, /Internet<br>tanpa FUP\./);
+  assert.match(html, /class="login-link" href="\/customer\/signin"/);
+  assert.match(html, /id="paket"/);
+  assert.match(html, /id="cakupan"/);
+
+  const assets = [...html.matchAll(/(?:href|src|component-url|renderer-url)="(\/(?:_astro|mascots)\/[^\"]+)"/g)]
+    .map((match) => match[1]);
+  assert.ok(assets.length > 0);
+  for (const asset of assets) {
+    assert.ok(fs.existsSync(path.join(landingDir, asset.slice(1))), `${asset} is missing`);
+  }
+});
+
+test('customer sign-in contains only the login flow', async () => {
   const html = await render();
-  assert.match(html, /method="POST" action="\/customer\/login"/);
+  assert.match(html, /method="POST" action="\/customer\/signin"/);
   assert.match(html, /name="phone"[^>]*required/);
   assert.match(html, /name="password"[^>]*required/);
   assert.match(html, /id="password-visibility"/);
   assert.match(html, /id="remember-phone"/);
-  assert.match(html, /href="\/customer\/register"/);
-  assert.match(html, /href="\/customer\/check-billing"/);
-  assert.match(html, /href="\/customer\/voucher"/);
+  assert.match(html, /href="\/">Kembali ke beranda<\/a>/);
   assert.match(html, /href="https:\/\/wa\.me\/6281234567890\?text=/);
-  assert.ok(html.indexOf('Home Basic') < html.indexOf('Home Pro'));
+  assert.equal((html.match(/<section\b/g) || []).length, 1);
+  assert.doesNotMatch(html, /Paket & Tarif|Beli Voucher|Cek Tagihan|Daftar Pemasangan Baru/);
 });
 
-test('homepage renders optional states and local fallback links', async () => {
+test('customer sign-in renders optional states and local fallback links', async () => {
   const html = await render({
     settings: { company_phone: '', login_otp_enabled: true },
-    packages: [],
     error: 'Login gagal'
   });
-  assert.match(html, /href="\/customer\/contact">Lupa password\?<\/a>/);
+  assert.match(html, /href="\/customer\/contact">Lupa kata sandi\?<\/a>/);
   assert.match(html, /Kode OTP akan dikirim via WhatsApp/);
-  assert.match(html, /Belum Ada Paket Dipublikasikan/);
-  assert.match(html, /Login gagal/);
-});
-
-test('homepage stylesheet references an available hero image', () => {
-  const css = fs.readFileSync(stylesheet, 'utf8');
-  const image = css.match(/url\('\/img\/(elround-fiber-home-v2\.[^']+)'\)/);
-  assert.ok(image);
-  assert.ok(fs.statSync(path.join(__dirname, '../public/img', image[1])).size > 0);
+  assert.match(html, /role="alert">Login gagal<\/p>/);
 });

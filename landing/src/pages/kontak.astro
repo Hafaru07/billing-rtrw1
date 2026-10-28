@@ -1,0 +1,21 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import { company, whatsappUrl } from '../data/site';
+---
+<BaseLayout title="Kontak" description="Hubungi Elround Network untuk bertanya tentang paket, jangkauan, pemasangan, dan tagihan internet.">
+  <div id="top"></div><Header />
+  <main id="main" class="legal-main container">
+    <a class="back-link" href="/">← Kembali ke beranda</a>
+    <h1>Kontak Elround</h1>
+    <p class="legal-intro">Sampaikan alamat pemasangan atau pertanyaan Anda. Tim kami akan membantu memeriksa pilihan layanan yang tersedia.</p>
+    <div class="legal-content">
+      <section><h2>WhatsApp</h2><p><a href={whatsappUrl('Halo Elround Network, saya ingin bertanya tentang layanan internet.')} target="_blank" rel="noopener noreferrer">{company.phoneDisplay}</a></p><p>Untuk cek jangkauan, kirim alamat lengkap atau patokan lokasi melalui WhatsApp.</p></section>
+      <section><h2>Email</h2><p><a href={`mailto:${company.email}`}>{company.email}</a></p></section>
+      <section><h2>Alamat usaha</h2><p>{company.legalName}<br />{company.address}</p></section>
+      <section><h2>Wilayah layanan</h2><p>{company.areas.join(', ')}. Ketersediaan jaringan tetap diperiksa untuk alamat pemasangan Anda.</p></section>
+      <section><h2>Instagram</h2><p><a href={company.instagram} target="_blank" rel="noopener noreferrer">{company.instagramDisplay}</a></p></section>
+    </div>
+  </main><Footer />
+</BaseLayout>
