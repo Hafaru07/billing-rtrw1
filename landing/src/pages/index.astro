@@ -2,7 +2,7 @@
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
-import Lightfall from '../components/Lightfall.jsx';
+import Lightfall from '../components/Lightfall.vue';
 import { plans, formatRupiah, whatsappUrl, company } from '../data/site';
 ---
 <BaseLayout>
@@ -12,24 +12,22 @@ import { plans, formatRupiah, whatsappUrl, company } from '../data/site';
       <div class="hero-arc hero-arc-one" aria-hidden="true"></div><div class="hero-arc hero-arc-two" aria-hidden="true"></div>
       <div class="hero-fiber-flow hero-fiber-flow-desktop" aria-hidden="true">
         <Lightfall
-          client:media="(min-width: 851px)"
+          client:media="(min-width: 851px) and (prefers-reduced-motion: no-preference)"
           colors={['#2aafff', '#7cddff', '#e3f8ff']}
           backgroundColor="#126df4"
-          speed={1.8}
+          speed={3}
           streakCount={4}
-          streakWidth={0.7}
-          streakLength={1.7}
-          density={1.2}
+          streakWidth={0.85}
+          streakLength={1.6}
+          density={0.95}
           zoom={2.5}
-          glow={1.05}
-          bloom={0.24}
+          glow={1.1}
           backgroundGlow={0}
-          opacity={0.52}
+          opacity={0.5}
           mouseInteraction={false}
-          holdToWarp={false}
-          intro={false}
-          fade={0}
           dpr={1}
+          shaderSteps={30}
+          maxFps={60}
         />
       </div>
       <div class="hero-fiber-flow hero-fiber-flow-mobile" aria-hidden="true">
@@ -37,21 +35,18 @@ import { plans, formatRupiah, whatsappUrl, company } from '../data/site';
           client:media="(max-width: 850px) and (prefers-reduced-motion: no-preference)"
           colors={['#2aafff', '#7cddff', '#e3f8ff']}
           backgroundColor="#126df4"
-          speed={1.5}
+          speed={3}
           streakCount={3}
           streakWidth={0.9}
-          streakLength={1.7}
-          density={0.9}
+          streakLength={1.5}
+          density={0.8}
           zoom={2.5}
-          glow={1.3}
-          bloom={0}
+          glow={1.15}
           backgroundGlow={0}
-          opacity={0.62}
+          opacity={0.6}
           mouseInteraction={false}
-          holdToWarp={false}
-          intro={false}
-          fade={0}
-          dpr={0.85}
+          dpr={0.65}
+          shaderSteps={16}
           maxFps={30}
         />
       </div>

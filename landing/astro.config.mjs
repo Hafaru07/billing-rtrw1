@@ -1,11 +1,11 @@
 import { defineConfig } from 'astro/config';
 import tailwindcss from '@tailwindcss/vite';
-import react from '@astrojs/react';
+import vue from '@astrojs/vue';
 
 export default defineConfig({
   site: 'https://portal.elroundnet.my.id',
   outDir: '../public/landing',
   devToolbar: { enabled: false },
-  integrations: [react()],
+  integrations: [vue()],
   vite: { plugins: [tailwindcss()] },
 });
