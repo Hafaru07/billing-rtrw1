@@ -44,6 +44,7 @@ process.on('uncaughtException', (err) => {
 const session = require('express-session');
 const { getSetting, getSettingsWithCache, ensureDefaultSettings, getNowLocal, formatDateLocal, formatTimeLocal, parseDateInTimezone } = require('./config/settingsManager');
 const { getPaymentWebhookSecret, hasMatchingPaymentWebhookSecret } = require('./config/paymentWebhookSecret');
+const { parseRupiahAmountFromNotification, extractPaymentNotificationText } = require('./services/paymentNotificationParser');
 const { SUPPORTED_LANGS, FALLBACK_LANG, normalizeLang, t } = require('./config/i18n');
 
 // Pastikan semua default settings ada (untuk migrasi/update dari GitHub)
@@ -355,71 +356,6 @@ function normalizeDigiflazzStatus(status) {
 
 function getIp(req) {
   return String((req.headers['x-forwarded-for'] || '').toString().split(',')[0].trim() || req.ip || '');
-}
-
-function parseRupiahAmountFromNotification(content) {
-  const text = String(content || '').replace(/\u00A0/g, ' ').trim();
-  if (!text) return null;
-
-  const lower = text.toLowerCase();
-
-  // Deteksi chat/reaksi/kutipan tagihan yang bukan transaksi finansial asli
-  const chatOrInvoiceHints = [
-    'bereaksi', 'reacted', 'membalas', 'tagihan manual', 'kode bayar qris',
-    'rincian tagihan', 'portal pelanggan', 'silakan scan', 'mohon scan',
-    'link login', 'pengingat tagihan', 'halo pelanggan', 'yth. pelanggan',
-    'paket internet anda', 'sebelum tanggal jatuh tempo'
-  ];
-  if (chatOrInvoiceHints.some((h) => lower.includes(h))) {
-    return null;
-  }
-
-  const incomingHints = [
-    'pembayaran masuk', 'pembayaran diterima', 'uang masuk', 'transfer masuk',
-    'dana masuk', 'saldo masuk', 'saldo bertambah', 'berhasil top up',
-    'top up berhasil', 'topup berhasil', 'terima uang', 'telah diterima dari',
-    'diterima dari', 'qris berhasil', 'qris sukses', 'qr berhasil', 'qr sukses',
-    'payment received', 'kamu menerima', 'berhasil menerima', 'menambahkan',
-    'telah diterima sebesar', 'uang diterima'
-  ];
-  const outgoingHints = [
-    'mengirim', 'terkirim', 'telah dikirim', 'berhasil kirim', 'transfer ke',
-    'bayar ke', 'pembayaran berhasil', 'berhasil bayar', 'pembelian',
-    'belanja', 'purchase', 'kamu membayar', 'transaksi keluar', 'debit',
-    'dikenakan biaya', 'potongan'
-  ];
-
-  const hasIncomingHint = incomingHints.some((hint) => lower.includes(hint));
-  const hasOutgoingHint = outgoingHints.some((hint) => lower.includes(hint));
-
-  // WAJIB: Harus ada indikator uang masuk dan TIDAK BOLEH ada indikator uang keluar
-  if (!hasIncomingHint || hasOutgoingHint) {
-    return null;
-  }
-
-  const candidates = [
-    /(?:\bRp\.?\s*|IDR\s*)([0-9][0-9\.\,\s]*)/i,
-    /(?:sebesar|senilai|nominal|masuk|transfer|top\s*up|topup|saldo\s+masuk)\s*(?:saldo\s*)?(?:\bRp\.?\s*)?([0-9][0-9\.\,\s]*)/i,
-  ];
-
-  let raw = null;
-  for (const re of candidates) {
-    const m = text.match(re);
-    if (m && m[1]) {
-      raw = String(m[1]);
-      break;
-    }
-  }
-  if (!raw) return null;
-
-  let num = raw.replace(/\s+/g, '');
-  if (num.includes(',')) num = num.split(',')[0];
-  num = num.replace(/\./g, '');
-  num = num.replace(/[^\d]/g, '');
-  if (!num) return null;
-
-  const amount = Number.parseInt(num, 10);
-  return Number.isFinite(amount) ? amount : null;
 }
 
 function genRandomCode(len = 6) {
@@ -802,43 +738,13 @@ app.post('/api/webhook/v1/payment-notif', multer().any(), async (req, res) => {
   };
   logger.info(`[WEBHOOK][payment-notif] Debug params: query=${JSON.stringify(sanitizeForLog(req.query))} body=${JSON.stringify(sanitizeForLog(body))} headers=${JSON.stringify(sanitizeForLog(req.headers))}`);
 
-  // Collect all potential text from request
-  const extractedTexts = [];
-  if (typeof body === 'string') {
-    extractedTexts.push(body);
-  } else if (body && typeof body === 'object') {
-    for (const key of Object.keys(body)) {
-      const val = body[key];
-      if (typeof val === 'string' || typeof val === 'number') {
-        const kLc = key.toLowerCase();
-        if (['secret', 'token', 'key', 'password', 'pass'].some(k => kLc.includes(k))) continue;
-        if (['service', 'app', 'packagename'].includes(kLc)) continue;
-        extractedTexts.push(String(val));
-      }
-    }
-  }
-  if (req.query && typeof req.query === 'object') {
-    for (const key of Object.keys(req.query)) {
-      const val = req.query[key];
-      if (typeof val === 'string' || typeof val === 'number') {
-        const kLc = key.toLowerCase();
-        if (['secret', 'token', 'key', 'password', 'pass'].some(k => kLc.includes(k))) continue;
-        if (['service', 'app', 'packagename'].includes(kLc)) continue;
-        extractedTexts.push(String(val));
-      }
-    }
-  }
-  if (req.rawBody && typeof req.rawBody === 'string') {
-    const trimmedRaw = req.rawBody.trim();
-    if (!trimmedRaw.startsWith('{') && !trimmedRaw.startsWith('[')) {
-      extractedTexts.push(trimmedRaw);
-    }
-  }
+  const rawText = extractPaymentNotificationText({ body, query: req.query, rawBody: req.rawBody, headers: req.headers });
 
-  const rawText = Array.from(new Set(extractedTexts))
-    .map((v) => String(v || '').trim())
-    .filter(Boolean)
-    .join(' ');
+  if (!rawText) {
+    const bodyKeys = body && typeof body === 'object' ? Object.keys(body).slice(0, 10).join(',') : '';
+    logger.warn(`[WEBHOOK][payment-notif] Rejected: notification text missing. content_type=${String(req.get('content-type') || '-')} body_keys=${bodyKeys || 'none'}`);
+    return res.status(422).json({ ok: false, error: 'Unprocessable Entity', reason: 'notification_text_missing' });
+  }
 
   logger.info(`[WEBHOOK][payment-notif] IN service=${String(service || '-')} content="${rawText.replace(/\r?\n/g, ' ').slice(0, 500)}"`);
 
