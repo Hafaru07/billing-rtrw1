@@ -25,7 +25,8 @@ function parseRupiahAmountFromNotification(content) {
     'belanja', 'purchase', 'kamu membayar', 'transaksi keluar', 'debit',
     'dikenakan biaya', 'potongan'
   ];
-  if (!incomingHints.some((hint) => lower.includes(hint)) || outgoingHints.some((hint) => lower.includes(hint))) return null;
+  const paymentAmountReceived = /\bpembayaran\s+(?:sebesar\s+)?(?:Rp\.?\s*|IDR\s*)[0-9][0-9.,\s]*\s+(?:telah\s+)?diterima\b/i.test(text);
+  if ((!incomingHints.some((hint) => lower.includes(hint)) && !paymentAmountReceived) || outgoingHints.some((hint) => lower.includes(hint))) return null;
 
   const candidates = [
     /(?:\bRp\.?\s*|IDR\s*)([0-9][0-9\.\,\s]*)/i,

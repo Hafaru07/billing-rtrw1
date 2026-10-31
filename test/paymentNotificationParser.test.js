@@ -8,6 +8,12 @@ test('Jago incoming notification parses Rp1.807 as 1807', () => {
   assert.equal(parseRupiahAmountFromNotification(jagoNotification), 1807);
 });
 
+test('ShopeePay payment received parses the amount before the transaction ID', () => {
+  const notification = 'Pembayaran sebesar Rp2.003 diterima Pembayaran sebesar Rp2.003 telah diterima pada transaksi 167539893844104977.';
+  assert.equal(parseRupiahAmountFromNotification(notification), 2003);
+  assert.equal(parseRupiahAmountFromNotification('Pembayaran sebesar Rp2.003 berhasil pada transaksi 167539893844104977.'), null);
+});
+
 test('nested notification payload is extracted without including the webhook secret', () => {
   const text = extractPaymentNotificationText({
     body: { payload: { notification: { title: 'Jago', text: 'Kamu menambahkan Rp1.807 ke Kantong .' } }, secret_key: 'hidden-secret' },
