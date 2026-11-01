@@ -1,8 +1,9 @@
 const db = require('../config/database');
+const { hashPassword, verifyPassword } = require('./staffPassword');
 
 function authenticate(username, password) {
-  const tech = db.prepare('SELECT * FROM technicians WHERE username = ? AND password = ? AND is_active = 1').get(username, password);
-  return tech;
+  const tech = db.prepare('SELECT * FROM technicians WHERE username = ? AND is_active = 1').get(username);
+  return tech && verifyPassword(password, tech.password) ? tech : null;
 }
 
 function getTechById(id) {
@@ -96,7 +97,7 @@ function getAllTechnicians() {
 
 function createTechnician(data) {
   const stmt = db.prepare('INSERT INTO technicians (username, password, name, phone, area) VALUES (?, ?, ?, ?, ?)');
-  return stmt.run(data.username, data.password, data.name, data.phone || '', data.area || '');
+  return stmt.run(data.username, hashPassword(data.password), data.name, data.phone || '', data.area || '');
 }
 
 module.exports = {

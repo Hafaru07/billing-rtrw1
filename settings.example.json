@@ -1,0 +1,7 @@
+{
+  "server_port": 3001,
+  "admin_username": "admin",
+  "admin_password": "",
+  "session_secret": "",
+  "admin_api_key": ""
+}

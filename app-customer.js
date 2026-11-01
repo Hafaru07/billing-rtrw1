@@ -9,11 +9,10 @@ if (Object.prototype.hasOwnProperty.call(dotenvResult.parsed || {}, 'MY_WEBHOOK_
 const crypto = require('crypto');
 const multer = require('multer');
 const QRCode = require('qrcode');
-const _jimpMod = require('jimp');
-const Jimp = _jimpMod.Jimp || _jimpMod;
 const qrisUtil = require('./utils/qrisUtil');
 const { logger } = require('./config/logger');
 const db = require('./config/database');
+require('./services/staffPassword').migrateStaffPasswords(db);
 const customerSvc = require('./services/customerService');
 const billingSvc = require('./services/billingService');
 const whatsappService = require('./services/whatsappService');
@@ -30,20 +29,24 @@ if (dns.setDefaultResultOrder) {
 process.on('unhandledRejection', (reason, promise) => {
   const errorMsg = reason instanceof Error ? reason.stack : JSON.stringify(reason);
   logger.error(`Unhandled Rejection: ${errorMsg}`);
+  process.exit(1);
 });
 
-// Handle uncaught exceptions to prevent server crashes from external service failures
-// (e.g. ros-client throws uncaught errors when MikroTik router is unreachable)
+// An uncaught exception may leave application state inconsistent; let the process supervisor restart it.
 process.on('uncaughtException', (err) => {
   const errorMsg = err instanceof Error ? err.stack : String(err);
   logger.error(`uncaughtException: ${errorMsg}`);
-  // Don't exit process — keep server running despite transient connection errors
+  process.exit(1);
 });
 
 // Settings Management
 const session = require('express-session');
+const SqliteSessionStore = require('./services/sqliteSessionStore');
 const { getSetting, getSettingsWithCache, ensureDefaultSettings, getNowLocal, formatDateLocal, formatTimeLocal, parseDateInTimezone } = require('./config/settingsManager');
 const { getPaymentWebhookSecret, hasMatchingPaymentWebhookSecret } = require('./config/paymentWebhookSecret');
+const { publicWriteRateLimiter, webhookRateLimiter, publicImageRateLimiter } = require('./middleware/rateLimiter');
+const { verifyFonnteWebhook, verifyMetaWebhook } = require('./middleware/webhookAuth');
+const publicTokenUtil = require('./utils/tokenUtil');
 const { parseRupiahAmountFromNotification, extractPaymentNotificationText } = require('./services/paymentNotificationParser');
 const { SUPPORTED_LANGS, FALLBACK_LANG, normalizeLang, t } = require('./config/i18n');
 
@@ -56,11 +59,17 @@ if (typeof ensureDefaultSettings === 'function') {
 const app = express();
 
 const isProduction = process.env.NODE_ENV === 'production';
-const cookieSecure = getSetting('cookie_secure', isProduction);
+const cookieSecure = getSetting('cookie_secure', isProduction || /^https:\/\//i.test(String(getSetting('app_url', '') || '')));
 const trustProxySetting = getSetting('trust_proxy', true);
-app.set('trust proxy', trustProxySetting ? 1 : true);
+app.set('trust proxy', trustProxySetting === false ? false : 1);
 
 // Middleware dasar
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('X-Frame-Options', 'DENY');
+  next();
+});
 app.use(express.json({
   limit: '1mb',
   verify: (req, res, buf) => {
@@ -88,7 +97,8 @@ app.use(express.text({
   }
 }));
 app.use(session({
-  secret: getSetting('session_secret', 'rahasia-portal-pelanggan-default-ganti-ini'),
+  secret: getSetting('session_secret'),
+  store: new SqliteSessionStore(db),
   resave: false,
   saveUninitialized: false,
   cookie: {
@@ -104,7 +114,7 @@ app.use(session({
 // Middleware Proteksi CSRF berbasis Referer/Origin (Aman untuk production tanpa merubah EJS)
 app.use((req, res, next) => {
   const method = req.method;
-  if (['POST', 'PUT', 'DELETE'].includes(method)) {
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
     const origin = req.headers.origin;
     const referer = req.headers.referer;
     const host = req.headers.host;
@@ -129,6 +139,12 @@ app.use((req, res, next) => {
           logger.warn(`[CSRF] Blocked request from unauthorized referer: ${referer} (host: ${host})`);
           return res.status(403).json({ error: 'Forbidden - Invalid Referer (CSRF Protection)' });
         }
+      } else {
+        const hasSessionLogin = Boolean(req.session?.isAdmin || req.session?.isCashier || req.session?.isAgent || req.session?.isCollector || req.session?.isTechnician || req.session?.customerId);
+        const explicitApiAuth = Boolean(req.get('authorization') || req.get('x-access-token') || req.get('x-admin-key'));
+        if (hasSessionLogin && !explicitApiAuth && req.get('sec-fetch-site') !== 'same-origin') {
+          return res.status(403).json({ error: 'Forbidden - Request origin required' });
+        }
       }
     } catch (e) {
       logger.error(`[CSRF] Parsing referer/origin failed: ${e.message}`);
@@ -140,11 +156,11 @@ app.use((req, res, next) => {
 
 // i18n middleware (aman: hanya teks UI, tidak mengubah logic fitur)
 app.use((req, res, next) => {
-  if (req.query && typeof req.query.lang === 'string') {
-    const requested = normalizeLang(req.query.lang);
+  const requested = req.query && typeof req.query.lang === 'string' ? normalizeLang(req.query.lang) : null;
+  if (requested && (req.session?.lang || req.session?.isAdmin || req.session?.isCashier || req.session?.customerId || req.session?.isAgent || req.session?.isCollector || req.session?.isTechnician)) {
     req.session.lang = requested;
   }
-  const saved = req.session?.lang || getSetting('default_lang', FALLBACK_LANG);
+  const saved = requested || req.session?.lang || getSetting('default_lang', FALLBACK_LANG);
   const lang = normalizeLang(saved);
   const tz = getSetting('timezone', 'Asia/Jakarta');
   res.locals.lang = lang;
@@ -158,11 +174,16 @@ app.use((req, res, next) => {
   next();
 });
 
-app.get('/lang/:lang', (req, res) => {
+app.get('/lang/:lang', publicWriteRateLimiter, (req, res) => {
   const targetLang = normalizeLang(req.params.lang);
   req.session.lang = targetLang;
   const referer = req.get('referer');
-  if (referer) return res.redirect(referer);
+  if (referer) {
+    try {
+      const target = new URL(referer);
+      if (target.host === req.get('host')) return res.redirect(target.pathname + target.search);
+    } catch {}
+  }
   return res.redirect('/');
 });
 
@@ -172,6 +193,11 @@ const VERSION = '2.0.0';
 const insertWebhookPaymentNotif = db.prepare(`
   INSERT INTO webhook_payment_notifs (service, content, parsed_amount, parsed_ok, ip, user_agent)
   VALUES (?, ?, ?, ?, ?, ?)
+`);
+const selectDuplicatePaymentNotif = db.prepare(`
+  SELECT id FROM webhook_payment_notifs
+  WHERE service = ? AND content = ?
+  LIMIT 1
 `);
 
 const updateWebhookPaymentNotifMatchInvoice = db.prepare(`
@@ -475,7 +501,7 @@ async function buildQrisJpgFromSettings(settings, amount) {
   if (!payload) throw new Error('QRIS payload belum diatur');
   const dynamic = convertStaticQrisToDynamic(payload, amount);
   const png = await QRCode.toBuffer(dynamic, { errorCorrectionLevel: 'M', margin: 1, width: 420, type: 'png' });
-  return await Jimp.read(png).then(img => img.quality(90).background(0xffffffff).getBufferAsync(Jimp.MIME_JPEG));
+  return qrisUtil.pngToJpegBuffer(png);
 }
 
 async function trySendWaToBuyer(settings, phone, message, orderId) {
@@ -602,7 +628,11 @@ async function fulfillDonationOrder(settings, donationOrderId) {
   const donorName = String(ord.donor_name || 'Hamba Allah').trim();
   const donorPhone = String(ord.donor_phone || '').trim();
   const amount = Number(ord.qris_amount_unique || ord.amount || 0);
-  const activationCode = String(ord.activation_code || 'donasidulu').trim();
+  let activationCode = String(ord.activation_code || '').trim();
+  if (!activationCode || activationCode === 'donasidulu') {
+    activationCode = crypto.randomBytes(12).toString('hex');
+    db.prepare('UPDATE public_donation_orders SET activation_code=? WHERE id=?').run(activationCode, donationOrderId);
+  }
   const baseUrl = String(settings.app_url || '').replace(/\/+$/, '');
   const sidebarSettingsLink = `${baseUrl}/admin/sidebar-settings`;
 
@@ -642,11 +672,11 @@ Dukungan Anda sangat berarti bagi pengembangan aplikasi Billing RTRW & RADIUS. S
 // Meta WhatsApp Cloud API Public Webhook Endpoints
 const metaWAService = require('./services/metaWhatsappService');
 app.get('/api/meta-webhook', (req, res) => metaWAService.verifyWebhook(req, res));
-app.post('/api/meta-webhook', (req, res) => metaWAService.processWebhookEvent(req, res));
+app.post('/api/meta-webhook', webhookRateLimiter, verifyMetaWebhook, (req, res) => metaWAService.processWebhookEvent(req, res));
 
 // Fonnte WhatsApp Gateway Public Webhook Endpoint
 const fonnteWAService = require('./services/fonnteWhatsappService');
-app.post(['/api/webhook/fonnte', '/api/fonnte-webhook'], express.json(), express.urlencoded({ extended: true }), async (req, res) => {
+app.post(['/api/webhook/fonnte', '/api/fonnte-webhook'], webhookRateLimiter, express.json(), express.urlencoded({ extended: true }), verifyFonnteWebhook, async (req, res) => {
   try {
     const data = req.body || {};
     logger.info(`[Fonnte Webhook Received] From: ${data.sender || data.from || ''} - Message: "${data.message || data.text || ''}"`);
@@ -658,7 +688,7 @@ app.post(['/api/webhook/fonnte', '/api/fonnte-webhook'], express.json(), express
   }
 });
 
-app.post('/api/webhook/v1/payment-notif', multer().any(), async (req, res) => {
+app.post('/api/webhook/v1/payment-notif', webhookRateLimiter, multer({ limits: { fieldSize: 16 * 1024, fields: 24, files: 0, parts: 24 } }).none(), async (req, res) => {
   let body = req.body || {};
   try {
     if (typeof body === 'string') {
@@ -686,14 +716,17 @@ app.post('/api/webhook/v1/payment-notif', multer().any(), async (req, res) => {
 
   const authHeader = req.get('authorization') || '';
   const bearerToken = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.substring(7).trim() : '';
+  const headerOnlyWebhook = process.env.PAYMENT_WEBHOOK_HEADER_ONLY === '1';
 
   const secretCandidates = [
-    ['body.secret_key', body?.secret_key],
-    ['body.secretKey', body?.secretKey],
-    ['body.secret', body?.secret],
-    ['query.secret_key', req.query?.secret_key],
-    ['query.secretKey', req.query?.secretKey],
-    ['query.secret', req.query?.secret],
+    ...(headerOnlyWebhook ? [] : [
+      ['body.secret_key', body?.secret_key],
+      ['body.secretKey', body?.secretKey],
+      ['body.secret', body?.secret],
+      ['query.secret_key', req.query?.secret_key],
+      ['query.secretKey', req.query?.secretKey],
+      ['query.secret', req.query?.secret]
+    ]),
     ['x-webhook-token', req.get('x-webhook-token')],
     ['x-webhook-secret', req.get('x-webhook-secret')],
     ['x-webhook-key', req.get('x-webhook-key')],
@@ -736,7 +769,7 @@ app.post('/api/webhook/v1/payment-notif', multer().any(), async (req, res) => {
     }
     return clean;
   };
-  logger.info(`[WEBHOOK][payment-notif] Debug params: query=${JSON.stringify(sanitizeForLog(req.query))} body=${JSON.stringify(sanitizeForLog(body))} headers=${JSON.stringify(sanitizeForLog(req.headers))}`);
+  logger.debug(`[WEBHOOK][payment-notif] Params: query=${JSON.stringify(sanitizeForLog(req.query)).slice(0, 1000)} body=${JSON.stringify(sanitizeForLog(body)).slice(0, 1000)}`);
 
   const rawText = extractPaymentNotificationText({ body, query: req.query, rawBody: req.rawBody, headers: req.headers });
 
@@ -744,6 +777,10 @@ app.post('/api/webhook/v1/payment-notif', multer().any(), async (req, res) => {
     const bodyKeys = body && typeof body === 'object' ? Object.keys(body).slice(0, 10).join(',') : '';
     logger.warn(`[WEBHOOK][payment-notif] Rejected: notification text missing. content_type=${String(req.get('content-type') || '-')} body_keys=${bodyKeys || 'none'}`);
     return res.status(422).json({ ok: false, error: 'Unprocessable Entity', reason: 'notification_text_missing' });
+  }
+  if (rawText.length > 4000) return res.status(413).json({ ok: false, error: 'Notification too long' });
+  if (selectDuplicatePaymentNotif.get(String(service || ''), rawText)) {
+    return res.status(200).json({ status: 'duplicate', parsed: false, amount: null });
   }
 
   logger.info(`[WEBHOOK][payment-notif] IN service=${String(service || '-')} content="${rawText.replace(/\r?\n/g, ' ').slice(0, 500)}"`);
@@ -806,14 +843,6 @@ app.post('/api/webhook/v1/payment-notif', multer().any(), async (req, res) => {
             }
 
             if (custId > 0) {
-              const otherUnpaid = db.prepare("SELECT id FROM invoices WHERE customer_id=? AND status='unpaid' AND id!=?").all(custId, invId);
-              if (otherUnpaid && otherUnpaid.length > 0) {
-                const oNote = `AUTO-QRIS: lunas dari pembayaran gabungan QRIS Rp ${amount}`;
-                for (const other of otherUnpaid) {
-                  markInvoicePaidAppendNote.run('QRIS', oNote, oNote, notifId || null, other.id);
-                }
-              }
-
               if (String(inv.customer_status || '') === 'suspended') {
                 const cnt = countUnpaidInvoicesForCustomer.get(custId);
                 const unpaid = Number(cnt?.c || 0);
@@ -1586,7 +1615,30 @@ app.get(['/download/app', '/download/apk', '/downloads/billing-rtrw.apk', '/down
   });
 });
 
-app.get('/uploads/qris/:filename', async (req, res) => {
+const qrisImageCache = new Map();
+let qrisImageJobs = 0;
+async function getQrisJpg(payload, amount = 0) {
+  const key = crypto.createHash('sha256').update(payload).update(':').update(String(amount)).digest('hex');
+  const cached = qrisImageCache.get(key);
+  if (cached && Date.now() - cached.time < 60 * 1000) return cached.promise;
+  if (qrisImageJobs >= 4) throw new Error('QRIS sedang sibuk');
+  qrisImageJobs++;
+  const promise = (async () => {
+    try {
+      if (amount > 0) return await qrisUtil.buildDynamicQrisJpgBuffer(payload, amount);
+      const png = await QRCode.toBuffer(payload, { errorCorrectionLevel: 'M', margin: 1, width: 420, type: 'png' });
+      return await qrisUtil.pngToJpegBuffer(png);
+    } finally { qrisImageJobs--; }
+  })();
+  qrisImageCache.set(key, { time: Date.now(), promise });
+  promise.catch(() => {
+    if (qrisImageCache.get(key)?.promise === promise) qrisImageCache.delete(key);
+  });
+  while (qrisImageCache.size > 100) qrisImageCache.delete(qrisImageCache.keys().next().value);
+  return promise;
+}
+
+app.get('/uploads/qris/:filename', publicImageRateLimiter, async (req, res) => {
   const wantsHtml = () => String(req.get('accept') || '').toLowerCase().includes('text/html');
   const sendPretty = (status, title, detail) => {
     if (!wantsHtml()) return res.status(status).send(title);
@@ -1609,9 +1661,7 @@ app.get('/uploads/qris/:filename', async (req, res) => {
     const settings = getSettingsWithCache();
     const payload = normalizeQrisPayload(String(settings?.qris_static_payload || ''));
     if (payload) {
-      const png = await QRCode.toBuffer(payload, { errorCorrectionLevel: 'M', margin: 1, width: 420, type: 'png' });
-      const img = await Jimp.read(png);
-      const jpg = await img.getBuffer('image/jpeg');
+      const jpg = await getQrisJpg(payload);
       res.set('Content-Type', 'image/jpeg');
       res.set('Cache-Control', 'no-store');
       return res.status(200).send(jpg);
@@ -1625,7 +1675,7 @@ app.get('/uploads/qris/:filename', async (req, res) => {
   }
 });
 
-app.get('/qris/static.jpg', async (req, res) => {
+app.get('/qris/static.jpg', publicImageRateLimiter, async (req, res) => {
   const wantsHtml = () => String(req.get('accept') || '').toLowerCase().includes('text/html');
   const sendPretty = (status, title, detail) => {
     if (!wantsHtml()) return res.status(status).send(title);
@@ -1636,6 +1686,7 @@ app.get('/qris/static.jpg', async (req, res) => {
   };
   try {
     const amount = Math.max(0, Math.floor(Number(req.query.amount || 0) || 0));
+    if (!Number.isSafeInteger(amount) || amount > 100000000) return res.status(400).send('Nominal QRIS tidak valid');
     const settings = getSettingsWithCache();
     const qrisUtil = require('./utils/qrisUtil');
     let payload = qrisUtil.normalizeQrisPayload(String(settings?.qris_static_payload || ''));
@@ -1656,14 +1707,12 @@ app.get('/qris/static.jpg', async (req, res) => {
 
     if (payload) {
       if (amount > 0) {
-        const jpg = await qrisUtil.buildDynamicQrisJpgBuffer(payload, amount);
+        const jpg = await getQrisJpg(payload, amount);
         res.set('Content-Type', 'image/jpeg');
         res.set('Cache-Control', 'no-store');
         return res.status(200).send(jpg);
       } else {
-        const png = await QRCode.toBuffer(payload, { errorCorrectionLevel: 'M', margin: 1, width: 420, type: 'png' });
-        const img = await Jimp.read(png);
-        const jpg = await img.getBuffer('image/jpeg');
+        const jpg = await getQrisJpg(payload);
         res.set('Content-Type', 'image/jpeg');
         res.set('Cache-Control', 'no-store');
         return res.status(200).send(jpg);
@@ -1725,8 +1774,8 @@ function ensureDonationOrderQrisUnique(baseAmount, donorPhone, donorName, notes)
 
   const ins = db.prepare(`
     INSERT INTO public_donation_orders (donor_name, donor_phone, amount, qris_amount_unique, qris_unique_code, notes, status, activation_code)
-    VALUES (?, ?, ?, ?, ?, ?, 'pending', 'donasidulu')
-  `).run(donorName || 'Hamba Allah', donorPhone, base, chosenAmount, chosenCode, notes || '');
+    VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+  `).run(donorName || 'Hamba Allah', donorPhone, base, chosenAmount, chosenCode, notes || '', crypto.randomBytes(12).toString('hex'));
 
   return {
     orderId: ins.lastInsertRowid,
@@ -1748,7 +1797,7 @@ app.get(['/donasi', '/donate', '/public/donasi'], (req, res) => {
 });
 
 // Endpoint Buat Pesanan Donasi dengan Kode Unik
-app.post(['/donasi/create', '/api/donasi/create'], (req, res) => {
+app.post(['/donasi/create', '/api/donasi/create'], publicWriteRateLimiter, (req, res) => {
   try {
     const { name, phone, amount, notes } = req.body || {};
     const donorName = String(name || 'Hamba Allah').trim();
@@ -1764,6 +1813,7 @@ app.post(['/donasi/create', '/api/donasi/create'], (req, res) => {
     return res.json({
       success: true,
       orderId: result.orderId,
+      token: publicTokenUtil.signPublicToken({ donationOrderId: result.orderId, exp: Date.now() + 24 * 60 * 60 * 1000 }, getSetting('session_secret')),
       uniqueCode: result.uniqueCode,
       amountUnique: result.amountUnique,
       baseAmount: result.baseAmount,
@@ -1779,6 +1829,8 @@ app.post(['/donasi/create', '/api/donasi/create'], (req, res) => {
 app.get(['/donasi/status/:orderId', '/api/donasi/status/:orderId'], (req, res) => {
   try {
     const orderId = Number(req.params.orderId || 0);
+    const token = publicTokenUtil.verifyPublicToken(String(req.query.t || ''), getSetting('session_secret'));
+    if (!token || Number(token.donationOrderId) !== orderId) return res.status(403).json({ success: false, message: 'Token donasi tidak valid' });
     const order = selectDonationOrderById.get(orderId);
     if (!order) return res.status(404).json({ success: false, message: 'Order donasi tidak ditemukan' });
 
@@ -1787,7 +1839,7 @@ app.get(['/donasi/status/:orderId', '/api/donasi/status/:orderId'], (req, res) =
       orderId: order.id,
       status: order.status,
       paid_at: order.paid_at || null,
-      activationCode: order.status === 'paid' ? (order.activation_code || 'donasidulu') : null,
+      activationCode: order.status === 'paid' ? order.activation_code : null,
       donorName: order.donor_name,
       amountUnique: order.qris_amount_unique,
       waSent: Boolean(order.wa_sent)
@@ -1798,36 +1850,16 @@ app.get(['/donasi/status/:orderId', '/api/donasi/status/:orderId'], (req, res) =
 });
 
 // Endpoint Konfirmasi Donasi & Fallback Kirim Kode Aktivasi
-app.post(['/donasi/confirm', '/api/donasi/confirm'], async (req, res) => {
+app.post(['/donasi/confirm', '/api/donasi/confirm'], publicWriteRateLimiter, async (req, res) => {
   try {
-    const { orderId, name, phone, amount, notes } = req.body || {};
-    let donId = Number(orderId || 0);
-    let ord = donId > 0 ? selectDonationOrderById.get(donId) : null;
-
-    if (!ord) {
-      const donorName = String(name || 'Hamba Allah').trim();
-      const donorPhone = String(phone || '').trim();
-      const baseAmount = Math.max(1000, parseInt(amount, 10) || 50000);
-      if (!donorPhone || donorPhone.length < 8) {
-        return res.status(400).json({ success: false, message: 'Nomor WhatsApp tidak valid' });
-      }
-      const created = ensureDonationOrderQrisUnique(baseAmount, donorPhone, donorName, notes);
-      donId = created.orderId;
-      ord = selectDonationOrderById.get(donId);
-    }
-
-    markDonationPaid.run(null, donId);
-    const fulfillRes = await fulfillDonationOrder(getSettingsWithCache(), donId);
-
-    return res.json({
-      success: true,
-      orderId: donId,
-      activationCode: 'donasidulu',
-      donorName: ord.donor_name,
-      donorAmount: ord.qris_amount_unique || ord.amount,
-      waSent: fulfillRes.ok,
-      waError: fulfillRes.error || null
-    });
+    const orderId = Number(req.body?.orderId || 0);
+    if (!Number.isSafeInteger(orderId) || orderId <= 0) return res.status(400).json({ success: false, message: 'Order donasi tidak valid' });
+    const token = publicTokenUtil.verifyPublicToken(String(req.body?.token || ''), getSetting('session_secret'));
+    if (!token || Number(token.donationOrderId) !== orderId) return res.status(403).json({ success: false, message: 'Token donasi tidak valid' });
+    const ord = selectDonationOrderById.get(orderId);
+    if (!ord) return res.status(404).json({ success: false, message: 'Order donasi tidak ditemukan' });
+    if (ord.status !== 'paid') return res.json({ success: false, status: 'pending', message: 'Pembayaran belum terdeteksi. Silakan tunggu notifikasi pembayaran.' });
+    return res.json({ success: true, status: 'paid', orderId, activationCode: ord.activation_code, donorName: ord.donor_name, donorAmount: ord.qris_amount_unique || ord.amount });
   } catch (e) {
     logger.error(`[Donasi] Error processing donation confirmation: ${e.message}`);
     return res.status(500).json({ success: false, message: e.message });

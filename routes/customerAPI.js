@@ -12,6 +12,7 @@ const { logger } = require('../config/logger');
 const customerSvc = require('../services/customerService');
 const { createCustomerPortalAuth } = require('../services/customerPortalAuth');
 const { loginRateLimiter } = require('../middleware/rateLimiter');
+const { getAdminUsername, verifyAdminCredentials } = require('../config/adminCredentials');
 const customerPortalAuth = createCustomerPortalAuth(db);
 const customerDevice = require('../services/customerDeviceService');
 const billingSvc = require('../services/billingService');
@@ -40,7 +41,7 @@ function b64urlDecodeToString(input) {
 
 function getApiSecret() {
   const settings = getSettingsWithCache();
-  return settings.session_secret || 'rahasia-api-pelanggan-alijaya-default';
+  return settings.session_secret;
 }
 
 function generateApiToken(payloadData) {
@@ -142,6 +143,15 @@ function requireAdminApiAuth(req, res, next) {
   req.admin = payload;
   req.user = payload;
   next();
+}
+
+function requireAdminOnlyApiAuth(req, res, next) {
+  requireAdminApiAuth(req, res, () => {
+    if (req.admin.role !== 'admin' && req.admin.role !== 'root') {
+      return res.status(403).json({ success: false, message: 'Akses admin diperlukan.' });
+    }
+    next();
+  });
 }
 
 // 3. Middleware Autentikasi API Kolektor (Ketat)
@@ -1556,7 +1566,7 @@ router.get('/app/admin/vouchers/options', requireAdminApiAuth, async (req, res) 
   }
 });
 
-router.post('/app/admin/vouchers/create-single', requireAdminApiAuth, express.json(), async (req, res) => {
+router.post('/app/admin/vouchers/create-single', requireAdminOnlyApiAuth, express.json(), async (req, res) => {
   try {
     const routerId = req.body.routerId ? Number(req.body.routerId) : null;
     const profileName = String(req.body.profile || '').trim();
@@ -1649,7 +1659,7 @@ router.post('/app/admin/vouchers/create-single', requireAdminApiAuth, express.js
   }
 });
 
-router.post('/app/admin/vouchers/create-batch', requireAdminApiAuth, express.json(), async (req, res) => {
+router.post('/app/admin/vouchers/create-batch', requireAdminOnlyApiAuth, express.json(), async (req, res) => {
   try {
     const routerId = req.body.routerId ? Number(req.body.routerId) : null;
     const profileName = String(req.body.profile || '').trim();
@@ -2062,7 +2072,7 @@ router.get('/app/admin/vouchers/batch/:id/print', (req, res) => {
   }
 });
 
-router.delete('/app/admin/vouchers/batch/:id', requireAdminApiAuth, async (req, res) => {
+router.delete('/app/admin/vouchers/batch/:id', requireAdminOnlyApiAuth, async (req, res) => {
   try {
     const batchId = Number(req.params.id);
     const batch = db.prepare('SELECT * FROM voucher_batches WHERE id = ?').get(batchId);
@@ -2239,7 +2249,7 @@ router.get('/app/map/data', requireTechApiAuth, (req, res) => {
 });
 
 // ─── ADMIN NATIVE: PENGATURAN SISTEM ─────────────────────────────────────────
-router.get('/app/admin/settings', requireAdminApiAuth, (req, res) => {
+router.get('/app/admin/settings', requireAdminOnlyApiAuth, (req, res) => {
   try {
     const s = getSettingsWithCache();
     res.json({
@@ -2261,7 +2271,7 @@ router.get('/app/admin/settings', requireAdminApiAuth, (req, res) => {
   }
 });
 
-router.post('/app/admin/settings/update', requireAdminApiAuth, (req, res) => {
+router.post('/app/admin/settings/update', requireAdminOnlyApiAuth, (req, res) => {
   try {
     const allowed = ['company_header', 'company_subheader', 'company_phone', 'company_address', 'timezone', 'qris_enabled', 'auto_isolate_enabled', 'webhook_secret'];
     const updates = req.body || {};
@@ -2339,12 +2349,15 @@ router.get('/app/admin/agents', requireAdminApiAuth, (req, res) => {
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 });
 
-router.post('/app/admin/agents/topup', requireAdminApiAuth, (req, res) => {
+router.post('/app/admin/agents/topup', requireAdminOnlyApiAuth, (req, res) => {
   try {
     const { agentId, amount, note } = req.body;
     const aid = Number(agentId); const amt = Number(amount);
-    if (!aid || !amt || amt <= 0) return res.status(400).json({ success: false, message: 'ID Agen dan nominal wajib diisi' });
-    db.prepare('UPDATE agents SET balance = balance + ? WHERE id = ?').run(amt, aid);
+    if (!Number.isSafeInteger(aid) || aid <= 0 || !Number.isSafeInteger(amt) || amt <= 0 || amt > 1_000_000_000) {
+      return res.status(400).json({ success: false, message: 'ID agen atau nominal tidak valid' });
+    }
+    const updated = db.prepare('UPDATE agents SET balance = balance + ? WHERE id = ?').run(amt, aid);
+    if (updated.changes !== 1) return res.status(404).json({ success: false, message: 'Agen tidak ditemukan' });
     const agent = db.prepare('SELECT name, balance FROM agents WHERE id = ?').get(aid);
     res.json({ success: true, message: `Saldo agen "${agent?.name}" berhasil ditambah Rp ${amt.toLocaleString('id-ID')}. Saldo baru: Rp ${(agent?.balance || 0).toLocaleString('id-ID')}` });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
@@ -2359,7 +2372,7 @@ router.post('/app/admin/customers/topup', requireAdminApiAuth, async (req, res) 
     const actorName = req.admin?.name || req.admin?.username || (req.admin?.role === 'cashier' ? 'Kasir' : 'Admin');
     const sendWa = sendWhatsApp !== false && sendWhatsApp !== 'false';
 
-    if (!cid || !amt || amt <= 0) {
+    if (!Number.isSafeInteger(cid) || cid <= 0 || !Number.isSafeInteger(amt) || amt <= 0 || amt > 1_000_000_000) {
       return res.status(400).json({ success: false, message: 'ID Pelanggan dan nominal valid wajib diisi.' });
     }
 
@@ -2474,7 +2487,7 @@ router.post('/app/admin/tickets/update-status', requireAdminApiAuth, (req, res) 
 });
 
 // ─── ADMIN NATIVE: BACKUP DATABASE ──────────────────────────────────────────
-router.get('/app/admin/backups', requireAdminApiAuth, (req, res) => {
+router.get('/app/admin/backups', requireAdminOnlyApiAuth, (req, res) => {
   try {
     const fs = require('fs');
     const path = require('path');
@@ -2489,7 +2502,7 @@ router.get('/app/admin/backups', requireAdminApiAuth, (req, res) => {
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 });
 
-router.post('/app/admin/backup/create', requireAdminApiAuth, (req, res) => {
+router.post('/app/admin/backup/create', requireAdminOnlyApiAuth, (req, res) => {
   try {
     const fs = require('fs');
     const path = require('path');
@@ -3364,9 +3377,8 @@ router.post('/auth/login', loginRateLimiter, (req, res) => {
   }
 
   // 1. Check Root Administrator
-  const adminUser = String(getSetting('admin_username', 'admin')).trim();
-  const adminPass = String(getSetting('admin_password', 'admin123')).trim();
-  if (inputUser.toLowerCase() === adminUser.toLowerCase() && inputPass === adminPass) {
+  const adminUser = getAdminUsername();
+  if (verifyAdminCredentials(inputUser, inputPass)) {
     const adminObj = { id: 1, name: 'Administrator', username: adminUser, role: 'admin' };
     const token = generateApiToken({ id: 1, adminId: 1, name: 'Administrator', username: adminUser, role: 'admin' });
     return res.json({
@@ -3804,7 +3816,7 @@ function requireTechApiAuth(req, res, next) {
 }
 
 // Login teknisi via API
-router.post('/tech/login', express.json(), (req, res) => {
+router.post('/tech/login', loginRateLimiter, express.json(), (req, res) => {
   try {
     const { username, password } = req.body || {};
     if (!username || !password) return res.status(400).json({ success: false, message: 'Username dan password harus diisi' });
@@ -3926,7 +3938,7 @@ function requireAgentApiAuth(req, res, next) {
 }
 
 // Login agen via API
-router.post('/agent/login', express.json(), (req, res) => {
+router.post('/agent/login', loginRateLimiter, express.json(), (req, res) => {
   try {
     const { username, password } = req.body || {};
     if (!username || !password) return res.status(400).json({ success: false, message: 'Username dan password harus diisi' });

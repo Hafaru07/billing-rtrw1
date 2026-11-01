@@ -24,6 +24,8 @@ let watcher = null;
 function getSettings() {
   try {
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) || {};
+
+    if (process.env.SESSION_SECRET) settings.session_secret = process.env.SESSION_SECRET;
     
     // Secure fallback for session_secret
     const defaultSecret = 'rahasia-portal-pelanggan-default-ganti-ini';
@@ -49,7 +51,10 @@ function getSettings() {
     return settings;
   } catch (error) {
     logger.error(`[settings] Error reading settings.json: ${error.message}`);
-    return {};
+    return {
+      session_secret: process.env.SESSION_SECRET || getSecureSessionSecretFallback(),
+      timezone: 'Asia/Jakarta'
+    };
   }
 }
 
@@ -107,6 +112,7 @@ function startSettingsWatcher() {
         logger.error(`[settings] Gagal memuat ulang settings.json: ${error.message}`);
       }
     });
+    watcher.unref();
 
     logger.info('[settings] Memantau perubahan settings.json');
   } catch (error) {

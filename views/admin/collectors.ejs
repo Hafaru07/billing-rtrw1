@@ -68,7 +68,7 @@
                 <tr data-mode="<%= c.auto_approve ? 'direct' : 'approval' %>" data-status="<%= c.is_active ? 'active' : 'inactive' %>">
                   <td><strong><%= c.name %></strong></td>
                   <td><code><%= c.username %></code></td>
-                  <td><span class="text-muted"><%= c.password %></span></td>
+                  <td><span class="text-muted">Tersimpan</span></td>
                   <td><%= c.phone || '-' %></td>
                   <td><span class="badge" style="background:rgba(99,102,241,0.15);color:#818cf8"><%= c.area || '-' %></span></td>
                   <td>
@@ -104,7 +104,7 @@
       <div class="mbody">
         <div class="fg"><label class="fl">Nama Lengkap</label><input type="text" name="name" class="fc" required></div>
         <div class="fg"><label class="fl">Username Login</label><input type="text" name="username" class="fc" required></div>
-        <div class="fg"><label class="fl">Password</label><input type="text" name="password" class="fc" required></div>
+        <div class="fg"><label class="fl">Password</label><input type="password" name="password" class="fc" required></div>
         <div class="fg"><label class="fl">No. HP</label><input type="text" name="phone" class="fc" placeholder="08123456789"></div>
         <div class="fg">
           <label class="fl">Area / Wilayah Tugas</label>
@@ -148,7 +148,7 @@
       <div class="mbody">
         <div class="fg"><label class="fl">Nama Lengkap</label><input type="text" name="name" id="e-name" class="fc" required></div>
         <div class="fg"><label class="fl">Username Login</label><input type="text" name="username" id="e-username" class="fc" required></div>
-        <div class="fg"><label class="fl">Password</label><input type="text" name="password" id="e-password" class="fc" required></div>
+        <div class="fg"><label class="fl">Password</label><input type="password" name="password" id="e-password" class="fc" placeholder="Kosongkan jika tidak diubah"></div>
         <div class="fg"><label class="fl">No. HP</label><input type="text" name="phone" id="e-phone" class="fc"></div>
         <div class="fg">
           <label class="fl">Area / Wilayah Tugas</label>
@@ -221,7 +221,7 @@ function editCollector(c){
   document.getElementById('editForm').action='/admin/collectors/'+c.id+'/update';
   document.getElementById('e-name').value=c.name||'';
   document.getElementById('e-username').value=c.username||'';
-  document.getElementById('e-password').value=c.password||'';
+  document.getElementById('e-password').value='';
   document.getElementById('e-phone').value=c.phone||'';
   document.getElementById('e-area').value=c.area||'';
   document.getElementById('e-status').value=String(c.is_active ? 1 : 0);

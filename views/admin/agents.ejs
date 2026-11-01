@@ -103,7 +103,7 @@
       <div class="mbody">
         <div class="fg"><label class="fl"><%= t('admin.agents.form.name', 'Nama') %></label><input type="text" name="name" class="fc" required></div>
         <div class="fg"><label class="fl"><%= t('admin.agents.form.username', 'Username') %></label><input type="text" name="username" class="fc" required></div>
-        <div class="fg"><label class="fl"><%= t('admin.agents.form.password', 'Password') %></label><input type="text" name="password" class="fc" required></div>
+        <div class="fg"><label class="fl"><%= t('admin.agents.form.password', 'Password') %></label><input type="password" name="password" class="fc" required></div>
         <div class="fg"><label class="fl"><%= t('admin.agents.form.phone', 'No. HP') %></label><input type="text" name="phone" class="fc" placeholder="08123456789"></div>
         <div class="fg">
           <label class="fl">Router Wilayah / Area</label>
@@ -132,7 +132,7 @@
       <div class="mbody">
         <div class="fg"><label class="fl"><%= t('admin.agents.form.name', 'Nama') %></label><input type="text" name="name" id="ea-name" class="fc" required></div>
         <div class="fg"><label class="fl"><%= t('admin.agents.form.username', 'Username') %></label><input type="text" name="username" id="ea-username" class="fc" required></div>
-        <div class="fg"><label class="fl"><%= t('admin.agents.form.password', 'Password') %></label><input type="text" name="password" id="ea-password" class="fc" required></div>
+        <div class="fg"><label class="fl"><%= t('admin.agents.form.password', 'Password') %></label><input type="password" name="password" id="ea-password" class="fc" placeholder="Kosongkan jika tidak diubah"></div>
         <div class="fg"><label class="fl"><%= t('admin.agents.form.phone', 'No. HP') %></label><input type="text" name="phone" id="ea-phone" class="fc"></div>
         <div class="fg">
           <label class="fl">Router Wilayah / Area</label>
@@ -189,7 +189,7 @@ function editAgent(a) {
   document.getElementById('editAgentForm').action = '/admin/agents/' + a.id + '/update';
   document.getElementById('ea-name').value = a.name || '';
   document.getElementById('ea-username').value = a.username || '';
-  document.getElementById('ea-password').value = a.password || '';
+  document.getElementById('ea-password').value = '';
   document.getElementById('ea-phone').value = a.phone || '';
   document.getElementById('ea-router-id').value = a.router_id || '';
   document.getElementById('ea-fee').value = Number(a.billing_fee || 0);

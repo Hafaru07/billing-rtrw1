@@ -1,2 +1,11 @@
 # Isi dengan secret acak milik server, lalu restart aplikasi.
 MY_WEBHOOK_SECRET=
+ADMIN_PASSWORD=
+SESSION_SECRET=
+FONNTE_WEBHOOK_SECRET=
+META_APP_SECRET=
+META_VERIFY_TOKEN=
+# Aktifkan setelah MacroDroid memakai header x-webhook-token.
+PAYMENT_WEBHOOK_HEADER_ONLY=0
+# Jika proxy tidak berada di loopback, isi alamat IP proxy yang tepercaya (pisah koma).
+TRUSTED_PROXY_IPS=

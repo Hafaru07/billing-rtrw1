@@ -173,10 +173,11 @@ function listDigiflazzBrands(category = '') {
     .map(r => r.brand);
 }
 
+const { hashPassword, verifyPassword } = require('./staffPassword');
+
 function authenticate(username, password) {
-  return db
-    .prepare('SELECT * FROM agents WHERE username = ? AND password = ? AND is_active = 1')
-    .get(username, password);
+  const agent = db.prepare('SELECT * FROM agents WHERE username = ? AND is_active = 1').get(username);
+  return agent && verifyPassword(password, agent.password) ? agent : null;
 }
 
 function getAllAgents() {
@@ -228,7 +229,7 @@ function createAgent(data) {
     )
     .run(
       String(data.username || '').trim(),
-      String(data.password || ''),
+      hashPassword(data.password),
       String(data.name || '').trim(),
       String(data.phone || '').trim(),
       Math.max(0, Number(data.balance || 0) || 0),
@@ -247,7 +248,7 @@ function updateAgent(id, data) {
 
   const next = {
     username: String(data.username ?? existing.username).trim(),
-    password: String(data.password ?? existing.password),
+    password: data.password ? hashPassword(data.password) : existing.password,
     name: String(data.name ?? existing.name).trim(),
     phone: String(data.phone ?? existing.phone).trim(),
     billing_fee: Math.max(0, Number(data.billing_fee ?? existing.billing_fee) || 0),

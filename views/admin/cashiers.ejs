@@ -54,7 +54,7 @@
                 <tr>
                   <td><strong><%= c.name %></strong></td>
                   <td><code><%= c.username %></code></td>
-                  <td><span class="text-muted"><%= c.password %></span></td>
+                  <td><span class="text-muted">Tersimpan</span></td>
                   <td><%= c.phone || '-' %></td>
                   <td>
                     <span class="badge <%= c.is_active ? 'bs' : 'bd' %>">
@@ -87,7 +87,7 @@
       <div class="mbody">
         <div class="fg"><label class="fl"><%= t('admin.cashiers.form.full_name', 'Nama Lengkap') %></label><input type="text" name="name" class="fc" required></div>
         <div class="fg"><label class="fl"><%= t('admin.cashiers.form.login_username', 'Username Login') %></label><input type="text" name="username" class="fc" required></div>
-        <div class="fg"><label class="fl"><%= t('admin.cashiers.form.password', 'Password') %></label><input type="text" name="password" class="fc" required></div>
+        <div class="fg"><label class="fl"><%= t('admin.cashiers.form.password', 'Password') %></label><input type="password" name="password" class="fc" required></div>
         <div class="fg"><label class="fl"><%= t('admin.cashiers.form.phone', 'No. HP') %></label><input type="text" name="phone" class="fc" placeholder="<%= t('admin.cashiers.form.phone_placeholder', 'Contoh: 08123456789') %>"></div>
       </div>
       <div class="mf">
@@ -106,7 +106,7 @@
       <div class="mbody">
         <div class="fg"><label class="fl"><%= t('admin.cashiers.form.full_name', 'Nama Lengkap') %></label><input type="text" name="name" id="e-name" class="fc" required></div>
         <div class="fg"><label class="fl"><%= t('admin.cashiers.form.login_username', 'Username Login') %></label><input type="text" name="username" id="e-username" class="fc" required></div>
-        <div class="fg"><label class="fl"><%= t('admin.cashiers.form.password', 'Password') %></label><input type="text" name="password" id="e-password" class="fc" required></div>
+        <div class="fg"><label class="fl"><%= t('admin.cashiers.form.password', 'Password') %></label><input type="password" name="password" id="e-password" class="fc" placeholder="Kosongkan jika tidak diubah"></div>
         <div class="fg"><label class="fl"><%= t('admin.cashiers.form.phone', 'No. HP') %></label><input type="text" name="phone" id="e-phone" class="fc"></div>
         <div class="fg">
           <label class="fl"><%= t('admin.cashiers.form.account_status', 'Status Akun') %></label>
@@ -135,7 +135,7 @@ function editCashier(c) {
   document.getElementById('editForm').action = '/admin/cashiers/' + c.id + '/update';
   document.getElementById('e-name').value = c.name;
   document.getElementById('e-username').value = c.username;
-  document.getElementById('e-password').value = c.password;
+  document.getElementById('e-password').value = '';
   document.getElementById('e-phone').value = c.phone || '';
   document.getElementById('e-status').value = c.is_active;
   openModal('editCashierModal');

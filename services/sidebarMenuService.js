@@ -277,7 +277,12 @@ function getMenuDefinition(key) {
 }
 
 function isFeaturePasswordValid(password) {
-  return sha256(password) === getFeaturePasswordHash();
+  const code = String(password || '').trim();
+  if (!code || code === 'donasidulu') return false;
+  const configuredHash = getFeaturePasswordHash();
+  if (configuredHash !== FEATURE_PASSWORD_HASH && sha256(code) === configuredHash) return true;
+  const db = require('../config/database');
+  return Boolean(db.prepare("SELECT id FROM public_donation_orders WHERE status='paid' AND activation_code=? LIMIT 1").get(code));
 }
 
 function evaluateMenuAccess(menuKey, session) {

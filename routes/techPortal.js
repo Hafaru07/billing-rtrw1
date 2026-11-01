@@ -144,10 +144,13 @@ router.post('/login', loginRateLimiter, express.urlencoded({ extended: true }), 
   const { username, password } = req.body;
   const tech = techSvc.authenticate(username, password);
   if (tech) {
-    req.session.isTechnician = true;
-    req.session.techId = tech.id;
-    req.session.techName = tech.name;
-    return res.redirect('/tech');
+    return req.session.regenerate((err) => {
+      if (err) return res.status(500).send('Gagal membuat sesi login.');
+      req.session.isTechnician = true;
+      req.session.techId = tech.id;
+      req.session.techName = tech.name;
+      return res.redirect('/tech');
+    });
   }
   res.render('tech/login', { title: 'Teknisi Login', company: company(), error: 'Username atau password salah!' });
 });

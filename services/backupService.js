@@ -12,6 +12,16 @@ const backupDir = path.join(projectRoot, 'backups');
 const dbPath = path.join(projectRoot, 'database', 'billing.db');
 const settingsPath = path.join(projectRoot, 'settings.json');
 
+function resolveBackupFile(fileName) {
+  const name = String(fileName || '');
+  if (!name || name === '.' || name === '..' || name.includes('/') || name.includes('\\') || name.includes('\0')) {
+    throw new Error('Nama file backup tidak valid');
+  }
+  const resolved = path.resolve(backupDir, name);
+  if (path.dirname(resolved) !== path.resolve(backupDir)) throw new Error('Nama file backup tidak valid');
+  return resolved;
+}
+
 // Pastikan direktori backup ada
 if (!fs.existsSync(backupDir)) {
   fs.mkdirSync(backupDir, { recursive: true });
@@ -116,7 +126,7 @@ function backupAll() {
  */
 function restoreDatabase(backupFileName) {
   try {
-    const backupFilePath = path.join(backupDir, backupFileName);
+    const backupFilePath = resolveBackupFile(backupFileName);
 
     // Cek apakah file backup ada
     if (!fs.existsSync(backupFilePath)) {
@@ -161,7 +171,7 @@ function restoreDatabase(backupFileName) {
  */
 function restoreSettings(backupFileName) {
   try {
-    const backupFilePath = path.join(backupDir, backupFileName);
+    const backupFilePath = resolveBackupFile(backupFileName);
 
     // Cek apakah file backup ada
     if (!fs.existsSync(backupFilePath)) {
@@ -401,6 +411,7 @@ function scheduleAutoBackup() {
 }
 
 module.exports = {
+  resolveBackupFile,
   backupDatabase,
   backupSettings,
   backupAll,

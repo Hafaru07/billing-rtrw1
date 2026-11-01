@@ -4,11 +4,14 @@ node_modules/
 # Environment and Secrets
 .env
 *.env
+settings.json
+settings.json.*
 *.jks
 *.keystore
 local.properties
 
 # Database files
+database/
 database/*.db
 database/*.db-shm
 database/*.db-wal
@@ -20,6 +23,7 @@ database.sqlite
 
 # WhatsApp Sessions & Auth
 auth_info_baileys/
+data/wa-lid-map.json
 data/wwebjs_auth/
 data/test_wwebjs_auth/
 data/wa-lid-map.json
@@ -43,6 +47,7 @@ npm-debug.log*
 
 # Backups and temporary files
 backups/
+public/uploads/
 scratch/
 scratch_tz_scan.json
 temp/

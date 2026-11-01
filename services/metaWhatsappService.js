@@ -27,7 +27,8 @@ function verifyWebhook(req, res) {
     const token = req.query['hub.verify_token'];
     const challenge = req.query['hub.challenge'];
 
-    const configuredVerifyToken = getSetting('meta_verify_token', 'antigravity_meta_wa_secret');
+    const configuredVerifyToken = process.env.META_VERIFY_TOKEN || getSetting('meta_verify_token', '');
+    if (!configuredVerifyToken || configuredVerifyToken === 'antigravity_meta_wa_secret') return res.sendStatus(503);
 
     if (mode === 'subscribe' && token === configuredVerifyToken) {
       logger.info('[Meta WA Webhook] Webhook successfully verified by Meta!');

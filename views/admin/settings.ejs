@@ -380,7 +380,7 @@
             </div>
             <div class="fg">
               <label class="fl">Password Admin</label>
-              <input class="fc" type="password" name="admin_password" value="<%= settings.admin_password || '' %>">
+              <input class="fc" type="password" name="admin_password" value="" placeholder="<%= adminPasswordManagedByEnv ? 'Diatur melalui .env server' : 'Isi hanya jika ingin mengganti' %>" <%= adminPasswordManagedByEnv ? 'disabled' : '' %>>
             </div>
           </div>
           <div class="fg">

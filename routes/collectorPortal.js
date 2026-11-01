@@ -54,12 +54,15 @@ router.post('/login', loginRateLimiter, express.urlencoded({ extended: true }), 
   const password = String(req.body.password || '');
   const collector = adminSvc.authenticateCollector(username, password);
   if (collector) {
-    req.session.isCollector = true;
-    req.session.collectorId = collector.id;
-    req.session.collectorName = collector.name;
-    req.session.collectorUsername = collector.username;
-    req.session.collectorArea = collector.area || '';
-    return res.redirect('/collector');
+    return req.session.regenerate((err) => {
+      if (err) return res.status(500).send('Gagal membuat sesi login.');
+      req.session.isCollector = true;
+      req.session.collectorId = collector.id;
+      req.session.collectorName = collector.name;
+      req.session.collectorUsername = collector.username;
+      req.session.collectorArea = collector.area || '';
+      return res.redirect('/collector');
+    });
   }
   return res.render('collector/login', { title: 'Login Kolektor', company: company(), error: 'Username atau password salah!' });
 });

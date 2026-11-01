@@ -1,7 +1,10 @@
 const fs = require('fs');
 const path = require('path');
-const jimpMod = require('jimp');
-const Jimp = jimpMod.Jimp || jimpMod;
+const sharp = require('sharp');
+
+async function pngToJpegBuffer(png) {
+  return sharp(png, { limitInputPixels: 16_000_000 }).flatten({ background: '#ffffff' }).jpeg({ quality: 90 }).toBuffer();
+}
 const jsQR = require('jsqr');
 const QRCode = require('qrcode');
 const { BinaryBitmap, HybridBinarizer, RGBLuminanceSource, MultiFormatReader, BarcodeFormat, DecodeHintType } = require('@zxing/library');
@@ -104,14 +107,18 @@ function convertStaticQrisToDynamic(staticPayload, amount) {
 
 async function decodeQrisPayloadFromBuffer(buf) {
   if (!buf || !buf.length) return '';
+  let pixels;
+  try {
+    pixels = await sharp(buf, { limitInputPixels: 16_000_000 }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  } catch {
+    return '';
+  }
+  const { data, info } = pixels;
+  const rgba = new Uint8ClampedArray(data.buffer, data.byteOffset, data.byteLength);
 
   // 1. Try jsQR (Fast & reliable for screenshots)
   try {
-    const img = await Jimp.read(buf);
-    const w = img.bitmap.width;
-    const h = img.bitmap.height;
-    const data = new Uint8ClampedArray(img.bitmap.data);
-    const code = jsQR(data, w, h);
+    const code = jsQR(rgba, info.width, info.height);
     if (code && code.data) {
       const payload = normalizeQrisPayload(code.data);
       if (payload && payload.startsWith('000201')) return payload;
@@ -120,9 +127,7 @@ async function decodeQrisPayloadFromBuffer(buf) {
 
   // 2. Fallback to @zxing/library
   try {
-    const img = await Jimp.read(buf);
-    const rgba = new Uint8ClampedArray(img.bitmap.data.buffer, img.bitmap.data.byteOffset, img.bitmap.data.byteLength);
-    const source = new RGBLuminanceSource(rgba, img.bitmap.width, img.bitmap.height);
+    const source = new RGBLuminanceSource(rgba, info.width, info.height);
     const bitmap = new BinaryBitmap(new HybridBinarizer(source));
     const reader = new MultiFormatReader();
     const hints = new Map();
@@ -141,11 +146,11 @@ async function decodeQrisPayloadFromBuffer(buf) {
 async function buildDynamicQrisJpgBuffer(staticPayload, amount) {
   const dynamic = convertStaticQrisToDynamic(staticPayload, amount);
   const png = await QRCode.toBuffer(dynamic, { errorCorrectionLevel: 'M', margin: 1, width: 420, type: 'png' });
-  const img = await Jimp.read(png);
-  return await img.getBuffer('image/jpeg');
+  return pngToJpegBuffer(png);
 }
 
 module.exports = {
+  pngToJpegBuffer,
   normalizeQrisPayload,
   crc16CcittFalse,
   parseEmvTlvString,

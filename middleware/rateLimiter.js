@@ -1,13 +1,23 @@
 let loginRateLimiter = (req, res, next) => next();
+let publicWriteRateLimiter = (req, res, next) => next();
+let webhookRateLimiter = (req, res, next) => next();
+let publicImageRateLimiter = (req, res, next) => next();
 
 try {
   const rateLimit = require('express-rate-limit');
+  const trustedProxyIps = new Set(String(process.env.TRUSTED_PROXY_IPS || '').split(',').map(ip => ip.trim()).filter(Boolean));
+  const keyGenerator = (req) => {
+    const peer = String(req.socket?.remoteAddress || req.ip || '');
+    const trusted = peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1' || trustedProxyIps.has(peer);
+    return rateLimit.ipKeyGenerator(trusted ? req.ip : peer);
+  };
   loginRateLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 10, // Limit each IP to 10 login requests per windowMs
     standardHeaders: true,
     legacyHeaders: false,
     validate: { xForwardedForHeader: false },
+    keyGenerator,
     handler: (req, res) => {
       if (req.xhr || (req.headers.accept && req.headers.accept.includes('application/json'))) {
         return res.status(429).json({
@@ -42,11 +52,18 @@ try {
       `);
     }
   });
+  const common = { standardHeaders: true, legacyHeaders: false, validate: { xForwardedForHeader: false }, keyGenerator };
+  publicWriteRateLimiter = rateLimit({ ...common, windowMs: 60 * 1000, limit: 60 });
+  webhookRateLimiter = rateLimit({ ...common, windowMs: 60 * 1000, limit: 120 });
+  publicImageRateLimiter = rateLimit({ ...common, windowMs: 60 * 1000, limit: 120 });
 } catch (e) {
   // express-rate-limit missing fallback
   loginRateLimiter = (req, res, next) => next();
 }
 
 module.exports = {
-  loginRateLimiter
+  loginRateLimiter,
+  publicWriteRateLimiter,
+  webhookRateLimiter,
+  publicImageRateLimiter
 };

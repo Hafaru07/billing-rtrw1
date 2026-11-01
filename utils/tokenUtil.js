@@ -47,7 +47,9 @@ function verifyPublicToken(token, secret) {
       .update(data)
       .digest('hex');
     
-    if (sig !== expectedSig) {
+    const supplied = Buffer.from(String(sig || ''));
+    const expected = Buffer.from(expectedSig);
+    if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) {
       return null;
     }
     

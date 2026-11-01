@@ -14,6 +14,14 @@ test('ShopeePay payment received parses the amount before the transaction ID', (
   assert.equal(parseRupiahAmountFromNotification('Pembayaran sebesar Rp2.003 berhasil pada transaksi 167539893844104977.'), null);
 });
 
+test('plain text webhook parses pembayaran berhasil diterima', () => {
+  const notification = 'Pembayaran berhasil diterima Rp 2.004, berhasil';
+  const text = extractPaymentNotificationText({ body: {}, query: { secret_key: 'hidden' }, rawBody: notification });
+  assert.equal(text, notification);
+  assert.equal(parseRupiahAmountFromNotification(text), 2004);
+  assert.equal(parseRupiahAmountFromNotification('Pembayaran berhasil Rp 2.004'), null);
+});
+
 test('nested notification payload is extracted without including the webhook secret', () => {
   const text = extractPaymentNotificationText({
     body: { payload: { notification: { title: 'Jago', text: 'Kamu menambahkan Rp1.807 ke Kantong .' } }, secret_key: 'hidden-secret' },

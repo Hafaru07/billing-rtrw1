@@ -17,7 +17,7 @@ pm2 start app-customer.js --name billing
 ### Access Portals
 | Portal | URL | Default User |
 |--------|-----|---|
-| Admin | `http://localhost:3001/admin/login` | admin / admin123 |
+| Admin | `http://localhost:3001/admin/login` | username admin; password dari `ADMIN_PASSWORD` di `.env` |
 | Elround landing | `http://localhost:3001/` atau `/customer/login` | - |
 | Customer sign-in | `http://localhost:3001/customer/signin` | - |
 | Tech | `http://localhost:3001/tech/login` | - |

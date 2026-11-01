@@ -366,9 +366,9 @@
                 </div>
               </div>
 
-              <!-- TOMBOL KONFIRMASI MANUAL (JIKA DIBUTUHKAN) -->
+              <!-- CEK STATUS PEMBAYARAN -->
               <button type="button" id="btnConfirm" class="btn btn-outline-success btn-sm w-100 rounded-3 py-2 fw-bold" onclick="submitDonationManual()">
-                <i class="bi bi-check2-circle me-1"></i> Konfirmasi Manual (Jika Pembayaran Belum Terdeteksi)
+                <i class="bi bi-check2-circle me-1"></i> Cek Status Pembayaran
               </button>
             </div>
           </div>
@@ -404,13 +404,13 @@
             Gunakan kode aktivasi di bawah ini untuk membuka menu-menu yang terkunci di sidebar Admin Panel:
           </p>
           <div class="code-box">
-            <span class="code-text" id="activationCode">donasidulu</span>
+            <span class="code-text" id="activationCode"></span>
             <button type="button" class="btn btn-warning btn-sm fw-bold px-3 py-2 rounded-3" onclick="copyActivationCode()">
               <i class="bi bi-copy me-1"></i> Salin Kode
             </button>
           </div>
           <div class="small text-muted">
-            <i class="bi bi-check2-circle text-success me-1"></i> Masukkan kode <strong>donasidulu</strong> pada kolom <em>Password Aktivasi</em> di menu <strong>Pengaturan Sidebar</strong>, lalu ubah status menu menjadi <strong>Tampil</strong>.
+            <i class="bi bi-check2-circle text-success me-1"></i> Masukkan kode di atas pada kolom <em>Password Aktivasi</em> di menu <strong>Pengaturan Sidebar</strong>, lalu ubah status menu menjadi <strong>Tampil</strong>.
           </div>
         </div>
       </div>
@@ -442,7 +442,7 @@
           <div class="p-3 rounded-3 mb-3 text-start" style="background:rgba(245,158,11,0.1);border:1px dashed #f59e0b">
             <div class="small fw-bold text-warning mb-1"><i class="bi bi-key-fill me-1"></i> Kode Aktivasi Sidebar Anda:</div>
             <div class="d-flex align-items-center justify-content-between">
-              <span class="fs-4 fw-bold font-monospace text-light" id="modalCode">donasidulu</span>
+              <span class="fs-4 fw-bold font-monospace text-light" id="modalCode"></span>
               <button class="btn btn-warning btn-sm fw-bold px-3" onclick="copyActivationCode()">
                 <i class="bi bi-copy"></i> Salin
               </button>
@@ -486,6 +486,8 @@
       }
     }
 
+    let donationToken = '';
+
     async function generateQris() {
       if (isPaid) return;
       const amt = parseInt(document.getElementById('inputAmount').value, 10) || 50000;
@@ -503,6 +505,7 @@
         const data = await res.json();
         if (data.success && data.orderId) {
           currentOrderId = data.orderId;
+          donationToken = data.token || '';
           currentAmount = data.amountUnique || amt;
 
           document.getElementById('displayAmount').textContent = 'Rp ' + currentAmount.toLocaleString('id-ID');
@@ -543,7 +546,7 @@
         }
 
         try {
-          const res = await fetch('/donasi/status/' + orderId);
+          const res = await fetch('/donasi/status/' + orderId + '?t=' + encodeURIComponent(donationToken));
           if (!res.ok) return;
           const data = await res.json();
 
@@ -559,7 +562,7 @@
     }
 
     function onPaymentDetected(data) {
-      const code = data.activationCode || 'donasidulu';
+      const code = data.activationCode || '';
       if (document.getElementById('activationCode')) document.getElementById('activationCode').textContent = code;
       if (document.getElementById('modalCode')) document.getElementById('modalCode').textContent = code;
 
@@ -581,9 +584,8 @@
         card.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
 
-      document.getElementById('modalMsg').innerHTML = 
-        'Alhamdulillah, donasi dari <strong>' + (data.donorName || 'Sahabat') + '</strong> sebesar <strong>Rp ' + Number(currentAmount).toLocaleString('id-ID') + '</strong> telah berhasil diverifikasi oleh sistem.<br>' +
-        '<span class="text-success fw-bold"><i class="bi bi-whatsapp"></i> Notifikasi & kode aktivasi telah dikirim ke nomor WhatsApp Anda!</span>';
+      document.getElementById('modalMsg').textContent =
+        'Donasi dari ' + (data.donorName || 'Sahabat') + ' sebesar Rp ' + Number(currentAmount).toLocaleString('id-ID') + ' telah diterima.';
       
       const modal = new bootstrap.Modal(document.getElementById('successModal'));
       modal.show();
@@ -610,7 +612,7 @@
     }
 
     async function copyActivationCode() {
-      const code = document.getElementById('activationCode').textContent.trim() || 'donasidulu';
+      const code = document.getElementById('activationCode').textContent.trim();
       try {
         await navigator.clipboard.writeText(code);
         alert('Kode aktivasi "' + code + '" berhasil disalin!');
@@ -649,13 +651,13 @@
       const btn = document.getElementById('btnConfirm');
       const origText = btn.innerHTML;
       btn.disabled = true;
-      btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Memverifikasi & Mengirim WA...';
+      btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Memeriksa pembayaran...';
 
       try {
         const res = await fetch('/donasi/confirm', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ orderId: currentOrderId, name, phone, amount: currentAmount, notes })
+          body: JSON.stringify({ orderId: currentOrderId, token: donationToken })
         });
 
         const data = await res.json();

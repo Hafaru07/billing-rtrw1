@@ -127,10 +127,13 @@ router.post('/login', loginRateLimiter, express.urlencoded({ extended: true }), 
   const password = String(req.body.password || '');
   const agent = agentSvc.authenticate(username, password);
   if (agent) {
-    req.session.isAgent = true;
-    req.session.agentId = agent.id;
-    req.session.agentName = agent.name;
-    return res.redirect('/agent');
+    return req.session.regenerate((err) => {
+      if (err) return res.status(500).send('Gagal membuat sesi login.');
+      req.session.isAgent = true;
+      req.session.agentId = agent.id;
+      req.session.agentName = agent.name;
+      return res.redirect('/agent');
+    });
   }
   return res.render('agent/login', { title: 'Login Agent', company: company(), error: 'Username atau password salah!' });
 });

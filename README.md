@@ -6,7 +6,7 @@ Sistem manajemen ISP yang mengintegrasikan **penagihan**, **GenieACS**, **OLT (S
 
 [![GitHub license](https://img.shields.io/github/license/alijayanet/billing-rtrw)](https://github.com/alijayanet/billing-rtrw/blob/main/LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/alijayanet/billing-rtrw)](https://github.com/alijayanet/billing-rtrw/stargazers)
-[![Node.js Version](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen)](https://nodejs.org/)
+[![Node.js Version](https://img.shields.io/badge/node-20%20%7C%2022%20%7C%2024%20%7C%2026-brightgreen)](https://nodejs.org/)
 
 ---
 
@@ -130,7 +130,7 @@ Sistem manajemen ISP yang mengintegrasikan **penagihan**, **GenieACS**, **OLT (S
 
 ## Ringkasan tech stack
 
-- **Runtime**: Node.js **≥ 20** (disarankan LTS terbaru 20.x)
+- **Runtime**: Node.js **20, 22, 24, atau 26**
 - **Backend**: Express.js
 - **Database**: SQLite lewat **better-sqlite3** (file utama: `database/billing.db` — dibuat/dimigrasi otomatis saat pertama jalan)
 - **Tampilan**: EJS, Bootstrap 5, Bootstrap Icons
@@ -142,7 +142,7 @@ Sistem manajemen ISP yang mengintegrasikan **penagihan**, **GenieACS**, **OLT (S
 ## Instalasi
 
 ### Prasyarat
-- Node.js **20 atau lebih baru** (`engines` di `package.json`)
+- Node.js **20, 22, 24, atau 26** (`engines` di `package.json`)
 - Akses jaringan ke GenieACS / MikroTik jika fitur tersebut dipakai
 
 ### Langkah
@@ -229,7 +229,7 @@ Port mengikuti **`server_port`** di `settings.json` (default **3001**). Ganti `[
 
 Sumber landing page Astro berada di `landing/`. Setelah mengubahnya, jalankan `npm --prefix landing ci` sekali untuk memasang dependensi, lalu `npm run build:landing`. Hasil build di `public/landing/` dilayani oleh server yang sama. Harga dan promo pada landing page masih berasal dari `landing/src/data/site.ts`, belum dari database billing.
 
-Kredensial admin **awal** biasanya sesuai `admin_username` / `admin_password` di `settings.json` (contoh bawaan sering `admin` / `admin123`) — **wajib diganti** sebelum dipakai publik.
+Kredensial admin memakai `admin_username` di `settings.json` dan `ADMIN_PASSWORD` di `.env` (atau `admin_password` yang sudah diganti). Password bawaan `admin123` ditolak. Lihat `SECURITY_DEPLOY.md` sebelum pembaruan pertama.
 
 ---
 
@@ -278,7 +278,7 @@ Di menu **Setup Server & Printer Bluetooth**, Anda juga dapat menghubungkan prin
 ## Catatan platform
 
 - **Linux (Ubuntu / Armbian)**: pola di atas langsung dipakai.
-- **Windows**: sama (`npm install` / `npm start`); pastikan Node 20+ dan firewall mengizinkan port yang dipakai aplikasi.
+- **Windows**: sama (`npm install` / `npm start`); gunakan Node.js 20, 22, 24, atau 26 dan pastikan firewall mengizinkan port yang dipakai aplikasi.
 
 ---
 

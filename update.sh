@@ -30,6 +30,16 @@ fi
 
 cd "$SCRIPT_DIR"
 
+# Preserve local runtime files when a Git update stops tracking them.
+PRESERVE_DIR=$(mktemp -d)
+trap 'rm -rf -- "$PRESERVE_DIR"' EXIT
+for entry in settings.json .env database public/uploads data/wa-lid-map.json; do
+  if [ -e "$entry" ]; then
+    mkdir -p "$PRESERVE_DIR/$(dirname "$entry")"
+    cp -a "$entry" "$PRESERVE_DIR/$entry"
+  fi
+done
+
 # 1. Backup settings.json sebelum update
 echo -e "${BLUE}[INFO]${NC} Backup settings.json..."
 cp settings.json settings.json.bak 2>/dev/null || true
@@ -39,6 +49,17 @@ echo -e "${GREEN}[OK]${NC} Backup tersimpan di settings.json.bak"
 echo -e "${BLUE}[INFO]${NC} Menarik pembaruan dari GitHub..."
 HEAD_BEFORE=$(git rev-parse HEAD 2>/dev/null || echo "old")
 nice -n 19 git pull origin main 2>/dev/null || nice -n 19 git pull 2>/dev/null || true
+for entry in settings.json .env database public/uploads data/wa-lid-map.json; do
+  if [ -e "$PRESERVE_DIR/$entry" ]; then
+    mkdir -p "$(dirname "$entry")"
+    if [ -d "$PRESERVE_DIR/$entry" ]; then
+      mkdir -p "$entry"
+      cp -a "$PRESERVE_DIR/$entry/." "$entry/"
+    else
+      cp -a "$PRESERVE_DIR/$entry" "$entry"
+    fi
+  fi
+done
 HEAD_AFTER=$(git rev-parse HEAD 2>/dev/null || echo "new")
 
 # 3. Cek apakah package.json mengalami perubahan

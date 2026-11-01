@@ -4,6 +4,12 @@
  */
 const { logger } = require('../config/logger');
 
+function wantsJsonResponse(req) {
+  const accept = String(req.get('accept') || '').toLowerCase();
+  return req.path.startsWith('/api/') || req.xhr ||
+    (!accept.includes('text/html') && (accept.includes('application/json') || req.is('json')));
+}
+
 /**
  * Custom Error Classes
  */
@@ -90,13 +96,10 @@ function errorHandler(err, req, res, next) {
   }
 
   // Determine status code
-  const statusCode = err.statusCode || 500;
+  const statusCode = err.statusCode || (String(err.code || '').startsWith('LIMIT_') ? 413 : 500);
 
   // Determine response format based on request type
-  const isApi = req.path.startsWith('/api/');
-  const isJson = req.headers['content-type'] === 'application/json' || req.accepts('json');
-
-  if (isApi || isJson) {
+  if (wantsJsonResponse(req)) {
     // JSON response for API requests
     res.status(statusCode).json({
       success: false,
@@ -139,10 +142,7 @@ function errorHandler(err, req, res, next) {
  * 404 Not Found Handler
  */
 function notFoundHandler(req, res, next) {
-  const isApi = req.path.startsWith('/api/');
-  const isJson = req.headers['content-type'] === 'application/json' || req.accepts('json');
-
-  if (isApi || isJson) {
+  if (wantsJsonResponse(req)) {
     res.status(404).json({
       success: false,
       error: {
@@ -153,14 +153,8 @@ function notFoundHandler(req, res, next) {
       }
     });
   } else {
-    if (req.session) {
-      req.session._msg = {
-        type: 'error',
-        text: 'Halaman tidak ditemukan'
-      };
-    }
-    res.status(404).render('error', {
-      title: '404 - Not Found',
+    return res.status(404).render('error', {
+      title: 'Halaman tidak ditemukan',
       error: 'Halaman yang Anda cari tidak ditemukan',
       statusCode: 404
     });

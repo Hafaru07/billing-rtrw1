@@ -55,7 +55,7 @@
                 <tr>
                   <td><strong><%= tech.name %></strong></td>
                   <td><code><%= tech.username %></code></td>
-                  <td><span class="text-muted"><%= tech.password %></span></td>
+                  <td><span class="text-muted">Tersimpan</span></td>
                   <td><%= tech.phone || '-' %></td>
                   <td><%= tech.area || '-' %></td>
                   <td>
@@ -89,7 +89,7 @@
       <div class="mbody">
         <div class="fg"><label class="fl"><%= t('admin.technicians.form.full_name', 'Nama Lengkap') %></label><input type="text" name="name" class="fc" required></div>
         <div class="fg"><label class="fl"><%= t('admin.technicians.form.login_username', 'Username Login') %></label><input type="text" name="username" class="fc" required></div>
-        <div class="fg"><label class="fl"><%= t('admin.technicians.form.password', 'Password') %></label><input type="text" name="password" class="fc" required></div>
+        <div class="fg"><label class="fl"><%= t('admin.technicians.form.password', 'Password') %></label><input type="password" name="password" class="fc" required></div>
         <div class="fg"><label class="fl"><%= t('admin.technicians.form.whatsapp', 'No. WhatsApp') %></label><input type="text" name="phone" class="fc" placeholder="<%= t('admin.technicians.form.whatsapp_placeholder', 'Contoh: 08123456789') %>"></div>
         <div class="fg"><label class="fl"><%= t('admin.technicians.form.area', 'Area Tugas') %></label><input type="text" name="area" class="fc" placeholder="<%= t('admin.technicians.form.area_placeholder', 'Contoh: Kelurahan A, Blok B') %>"></div>
       </div>
@@ -109,7 +109,7 @@
       <div class="mbody">
         <div class="fg"><label class="fl"><%= t('admin.technicians.form.full_name', 'Nama Lengkap') %></label><input type="text" name="name" id="e-name" class="fc" required></div>
         <div class="fg"><label class="fl"><%= t('admin.technicians.form.login_username', 'Username Login') %></label><input type="text" name="username" id="e-username" class="fc" required></div>
-        <div class="fg"><label class="fl"><%= t('admin.technicians.form.password', 'Password') %></label><input type="text" name="password" id="e-password" class="fc" required></div>
+        <div class="fg"><label class="fl"><%= t('admin.technicians.form.password', 'Password') %></label><input type="password" name="password" id="e-password" class="fc" placeholder="Kosongkan jika tidak diubah"></div>
         <div class="fg"><label class="fl"><%= t('admin.technicians.form.whatsapp', 'No. WhatsApp') %></label><input type="text" name="phone" id="e-phone" class="fc"></div>
         <div class="fg"><label class="fl"><%= t('admin.technicians.form.area', 'Area Tugas') %></label><input type="text" name="area" id="e-area" class="fc"></div>
         <div class="fg">

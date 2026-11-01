@@ -19,13 +19,11 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const QRCode = require('qrcode');
-const _jimpMod = require('jimp');
-const Jimp = _jimpMod.Jimp || _jimpMod;
 const qrisUtil = require('../utils/qrisUtil');
 const { resolveHotspotContext } = require('../utils/hotspotVoucherReturn');
 const whatsappService = require('../services/whatsappService');
-const { BinaryBitmap, HybridBinarizer, RGBLuminanceSource, MultiFormatReader, BarcodeFormat, DecodeHintType } = require('@zxing/library');
 let loginRateLimiter = (req, res, next) => next();
+const { publicWriteRateLimiter } = require('../middleware/rateLimiter');
 try {
   const rlMod = require('../middleware/rateLimiter');
   if (rlMod && typeof rlMod.loginRateLimiter === 'function') {
@@ -1236,7 +1234,7 @@ router.get('/voucher/status/:orderId', async (req, res) => {
 });
 
 
-router.post('/public/voucher/create-payment', async (req, res) => {
+router.post('/public/voucher/create-payment', publicWriteRateLimiter, async (req, res) => {
   const settings = getSettingsWithCache();
   const activeRouters = db.prepare('SELECT id, host FROM routers WHERE is_active = 1').all();
   const hotspotLoginRequested = typeof req.body.hotspot_login === 'string' && req.body.hotspot_login.length > 0;
@@ -1762,14 +1760,16 @@ router.post(['/login', '/signin'], loginRateLimiter, async (req, res) => {
 
   // --- DIRECT LOGIN ---
   logger.info('[Login] Login direct berhasil.');
-  req.session.phone = customerPhone; // Nomor telepon untuk findCustomerByAny()
-  req.session.pppoe_username = pppoeUsername; // PPPoE username untuk GenieACS & MikroTik
-  req.session.customerId = authenticated.id;
-  req.session.portalAuthVersion = authenticated.authVersion;
-  if (customer && customer.status === 'suspended') {
-    return res.redirect('/isolated');
-  }
-  return res.redirect('/customer/dashboard');
+  const selectedLang = req.session.lang;
+  return req.session.regenerate((err) => {
+    if (err) return res.status(500).send('Gagal membuat sesi login.');
+    if (selectedLang) req.session.lang = selectedLang;
+    req.session.phone = customerPhone;
+    req.session.pppoe_username = pppoeUsername;
+    req.session.customerId = authenticated.id;
+    req.session.portalAuthVersion = authenticated.authVersion;
+    return res.redirect(customer && customer.status === 'suspended' ? '/isolated' : '/customer/dashboard');
+  });
 });
 
 router.get('/login-otp', (req, res) => {
@@ -1792,16 +1792,17 @@ router.post('/login-otp', loginRateLimiter, (req, res) => {
 
   if (otp === pending.otp) {
     logger.info('[Login] OTP berhasil diverifikasi.');
-    req.session.phone = pending.phone; // Nomor telepon customer
-    req.session.pppoe_username = pending.pppoeUsername; // PPPoE username untuk GenieACS & MikroTik
-    req.session.customerId = pending.customerId;
-    req.session.portalAuthVersion = pending.authVersion;
-    delete req.session.pending_login;
+    const selectedLang = req.session.lang;
     const custAfterOtp = customerSvc.findCustomerByAny(pending.phone);
-    if (custAfterOtp && custAfterOtp.status === 'suspended') {
-      return res.redirect('/isolated');
-    }
-    return res.redirect('/customer/dashboard');
+    return req.session.regenerate((err) => {
+      if (err) return res.status(500).send('Gagal membuat sesi login.');
+      if (selectedLang) req.session.lang = selectedLang;
+      req.session.phone = pending.phone;
+      req.session.pppoe_username = pending.pppoeUsername;
+      req.session.customerId = pending.customerId;
+      req.session.portalAuthVersion = pending.authVersion;
+      return res.redirect(custAfterOtp && custAfterOtp.status === 'suspended' ? '/isolated' : '/customer/dashboard');
+    });
   } else {
     return res.render('login_otp', { error: 'Kode OTP salah. Silakan coba lagi.', settings, phone: pending.phone });
   }

@@ -23,9 +23,11 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { spawnSync } = require('child_process');
-const XLSX = require('xlsx');
+const { exportRowsToXlsx } = require('../services/excelWorkbook');
 const multer = require('multer');
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 64 * 1024 * 1024, files: 1 } });
+const importUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024, files: 1 } });
+const { parseCustomerWorkbook } = require('../services/parseCustomerWorkbook');
 const qrisUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } });
 
 // Promo slides upload storage
@@ -71,14 +73,12 @@ const sidebarMenuSvc = require('../services/sidebarMenuService');
 const areaSvc = require('../services/areaService');
 const axios = require('axios');
 const crypto = require('crypto');
-const _jimpMod = require('jimp');
-const Jimp = _jimpMod.Jimp || _jimpMod;
 const jsQR = require('jsqr');
 const qrisUtil = require('../utils/qrisUtil');
-const { MultiFormatReader, BarcodeFormat, DecodeHintType, BinaryBitmap, HybridBinarizer, RGBLuminanceSource } = require('@zxing/library');
 const QRCode = require('qrcode');
 const acsPortal = require('./acsPortal');
 const { uploadAttendance, removeAttendanceFile } = require('../middleware/attendanceUpload');
+const { verifyAdminCredentials } = require('../config/adminCredentials');
 
 const DIGIFLAZZ_URL = 'https://api.digiflazz.com/v1';
 const digiflazzApi = axios.create({
@@ -173,10 +173,22 @@ async function invokeRouterOsMenuCommand(menu, command, args) {
 // ─── AUTH ──────────────────────────────────────────────────────────────────
 function requireAdmin(req, res, next) {
   if (req.session?.isAdmin || req.session?.isCashier) return next();
-  const adminKey = getSetting('admin_api_key', '');
-  const providedKey = req.headers['x-admin-key'] || req.query.key;
-  if (adminKey && providedKey === adminKey) return next();
+  const adminKey = String(getSetting('admin_api_key', '') || '');
+  const providedKey = String(req.get('x-admin-key') || '');
+  const supplied = Buffer.from(providedKey);
+  const expected = Buffer.from(adminKey);
+  if (adminKey && supplied.length === expected.length && crypto.timingSafeEqual(supplied, expected)) return next();
   return res.status(401).json({ error: 'Unauthorized - Admin/Staff access required' });
+}
+
+function requireNetworkAdmin(req, res, next) {
+  if (req.session?.isAdmin) return next();
+  const expected = String(getSetting('admin_api_key', '') || '');
+  const supplied = String(req.get('x-admin-key') || '');
+  const left = Buffer.from(supplied);
+  const right = Buffer.from(expected);
+  if (expected && left.length === right.length && crypto.timingSafeEqual(left, right)) return next();
+  return res.status(403).json({ error: 'Admin access required' });
 }
 
 function requireAdminSession(req, res, next) {
@@ -562,20 +574,26 @@ router.get('/login', (req, res) => {
 
 router.post('/login', loginRateLimiter, express.urlencoded({ extended: true }), (req, res) => {
   const { username, password } = req.body;
-  if (username === getSetting('admin_username', 'admin') && password === getSetting('admin_password', 'admin123')) {
-    req.session.isAdmin = true;
-    req.session.adminUser = username;
-    return res.redirect('/admin');
+  if (verifyAdminCredentials(username, password)) {
+    return req.session.regenerate((err) => {
+      if (err) return res.status(500).send('Gagal membuat sesi login.');
+      req.session.isAdmin = true;
+      req.session.adminUser = username;
+      return res.redirect('/admin');
+    });
   }
   
   // Check Cashier
   const cashier = adminSvc.authenticateCashier(username, password);
   if (cashier) {
-    req.session.isCashier = true;
-    req.session.cashierId = cashier.id;
-    req.session.cashierName = cashier.name;
-    req.session.cashierUsername = cashier.username;
-    return res.redirect('/admin');
+    return req.session.regenerate((err) => {
+      if (err) return res.status(500).send('Gagal membuat sesi login.');
+      req.session.isCashier = true;
+      req.session.cashierId = cashier.id;
+      req.session.cashierName = cashier.name;
+      req.session.cashierUsername = cashier.username;
+      return res.redirect('/admin');
+    });
   }
 
   res.render('admin/login', { title: 'Admin Login', company: company(), error: 'Username atau password salah' });
@@ -1595,7 +1613,7 @@ router.get('/cashiers/reports', requireAdminSession, requireSidebarMenuAccess('c
 
 // --- AGENT MANAGEMENT ---
 router.get('/agents', requireAdminSession, requireSidebarMenuAccess('agents'), (req, res) => {
-  const agents = agentSvc.getAllAgents();
+  const agents = agentSvc.getAllAgents().map(agent => ({ ...agent, password: '' }));
   const routers = mikrotikService.getAllRouters();
   res.render('admin/agents', {
     title: 'Manajemen Agent',
@@ -1712,7 +1730,7 @@ router.get('/', requireAdminSession, requireSidebarMenuAccess('dashboard'), asyn
 });
 
 // ─── DEVICE ROUTES (existing) ───────────────────────────────────────────────
-router.get('/devices', requireAdminSession, (req, res) => {
+router.get('/devices', requireAdminSession, restrictToAdmin, (req, res) => {
   const settings = getSettings();
   res.render('admin/dashboard', { title: 'Monitoring ONU', company: company(), version: '2.0.0', activePage: 'devices', billing: null, custStats: null, settings });
 });
@@ -2431,7 +2449,7 @@ router.post('/customers/:id/disconnect', requireAdminSession, async (req, res) =
 });
 
 // ─── EXPORT/IMPORT CUSTOMERS ──────────────────────────────────────
-router.get('/customers/export', requireAdminSession, (req, res) => {
+router.get('/customers/export', requireAdminSession, async (req, res) => {
   try {
     const customers = customerSvc.getAllCustomers();
     const data = customers.map(c => ({
@@ -2463,11 +2481,7 @@ router.get('/customers/export', requireAdminSession, (req, res) => {
       'Catatan': c.notes
     }));
 
-    const ws = XLSX.utils.json_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Pelanggan');
-    
-    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const buf = await exportRowsToXlsx(data, 'Pelanggan');
     res.setHeader('Content-Disposition', 'attachment; filename=daftar_pelanggan.xlsx');
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.send(buf);
@@ -2477,12 +2491,10 @@ router.get('/customers/export', requireAdminSession, (req, res) => {
   }
 });
 
-router.post('/customers/import', requireAdminSession, upload.single('file'), async (req, res) => {
+router.post('/customers/import', requireAdminSession, restrictToAdmin, importUpload.single('file'), async (req, res) => {
   try {
     if (!req.file) throw new Error('File tidak ditemukan');
-    const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(ws);
+    const rows = await parseCustomerWorkbook(req.file.buffer);
     logger.info(`[Import] Found ${rows.length} rows in Excel file.`);
 
     const packages = customerSvc.getAllPackages();
@@ -2511,7 +2523,7 @@ router.post('/customers/import', requireAdminSession, upload.single('file'), asy
       const excelRow = i + 2; // +1 baris header, +1 karena baris Excel mulai dari 1
 
       // Normalize row keys (trim whitespace)
-      const cleanRow = {};
+      const cleanRow = Object.create(null);
       Object.keys(row).forEach(k => {
         cleanRow[k.trim()] = row[k];
       });
@@ -3467,17 +3479,7 @@ router.post('/billing/:id/whatsapp', requireAdminSession, async (req, res) => {
       }
       try {
         const buf = await fs.promises.readFile(filePath);
-        const img = await Jimp.read(buf);
-        const rgba = new Uint8ClampedArray(img.bitmap.data.buffer, img.bitmap.data.byteOffset, img.bitmap.data.byteLength);
-        const source = new RGBLuminanceSource(rgba, img.bitmap.width, img.bitmap.height);
-        const bitmap = new BinaryBitmap(new HybridBinarizer(source));
-        const reader = new MultiFormatReader();
-        const hints = new Map();
-        hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.QR_CODE]);
-        reader.setHints(hints);
-        const decoded = reader.decode(bitmap);
-        const text = typeof decoded?.getText === 'function' ? decoded.getText() : String(decoded?.text || '');
-        const payload = normalizeQrisPayload(text);
+        const payload = await qrisUtil.decodeQrisPayloadFromBuffer(buf);
         if (!payload) return '';
         _decodedCache = { file: safeName, mtimeMs: st.mtimeMs, payload };
         global.__adminQrisDecodedCache = _decodedCache;
@@ -3977,7 +3979,7 @@ router.post('/sidebar-settings', requireAdminSession, restrictToAdmin, express.u
   res.redirect('/admin/sidebar-settings');
 });
 
-router.get('/settings', requireAdminSession, requireSidebarMenuAccess('settings'), (req, res) => {
+router.get('/settings', requireAdminSession, restrictToAdmin, requireSidebarMenuAccess('settings'), (req, res) => {
   const settings = getSettings();
   const protocol = req.headers['x-forwarded-proto'] || req.protocol;
   const host = req.get('host');
@@ -3987,15 +3989,15 @@ router.get('/settings', requireAdminSession, requireSidebarMenuAccess('settings'
   const webhookSecret = getPaymentWebhookSecret(settings);
   res.render('admin/settings', {
     title: 'Pengaturan Sistem', company: company(), activePage: 'settings',
-    settings, msg: flashMsg(req),
+    settings, msg: flashMsg(req), adminPasswordManagedByEnv: Boolean(process.env.ADMIN_PASSWORD),
     digiflazzWebhookUrl,
     paymentWebhookUrl,
-    macroWebhookUrl: buildPaymentWebhookUrl(baseUrl, webhookSecret),
+    macroWebhookUrl: buildPaymentWebhookUrl(baseUrl, process.env.PAYMENT_WEBHOOK_HEADER_ONLY === '1' ? '' : webhookSecret),
     webhookSecretConfigured: Boolean(webhookSecret)
   });
 });
 
-router.get('/ewallet-logs', requireAdminSession, requireSidebarMenuAccess('settings'), (req, res) => {
+router.get('/ewallet-logs', requireAdminSession, restrictToAdmin, requireSidebarMenuAccess('settings'), (req, res) => {
   const settings = getSettings();
   const protocol = req.headers['x-forwarded-proto'] || req.protocol;
   const host = req.get('host');
@@ -4005,16 +4007,16 @@ router.get('/ewallet-logs', requireAdminSession, requireSidebarMenuAccess('setti
   const webhookSecret = getPaymentWebhookSecret(settings);
   res.render('admin/settings', {
     title: 'Log Notifikasi E-Wallet (Webhook)', company: company(), activePage: 'ewallet_logs',
-    settings, msg: flashMsg(req),
+    settings, msg: flashMsg(req), adminPasswordManagedByEnv: Boolean(process.env.ADMIN_PASSWORD),
     digiflazzWebhookUrl,
     paymentWebhookUrl,
-    macroWebhookUrl: buildPaymentWebhookUrl(baseUrl, webhookSecret),
+    macroWebhookUrl: buildPaymentWebhookUrl(baseUrl, process.env.PAYMENT_WEBHOOK_HEADER_ONLY === '1' ? '' : webhookSecret),
     webhookSecretConfigured: Boolean(webhookSecret),
     viewMode: 'ewallet_logs'
   });
 });
 
-router.post('/settings/qris-upload', requireAdminSession, qrisUpload.single('qris_file'), async (req, res) => {
+router.post('/settings/qris-upload', requireAdminSession, restrictToAdmin, qrisUpload.single('qris_file'), async (req, res) => {
   try {
     const f = req.file;
     if (!f || !f.buffer || !f.originalname) throw new Error('File QRIS tidak ditemukan');
@@ -4061,7 +4063,7 @@ router.post('/settings/qris-upload', requireAdminSession, qrisUpload.single('qri
   res.redirect('/admin/settings');
 });
 
-router.post('/settings/logo-upload', requireAdminSession, qrisUpload.single('logo_file'), async (req, res) => {
+router.post('/settings/logo-upload', requireAdminSession, restrictToAdmin, qrisUpload.single('logo_file'), async (req, res) => {
   try {
     const f = req.file;
     if (!f || !f.buffer || !f.originalname) throw new Error('File logo tidak ditemukan');
@@ -4446,9 +4448,13 @@ router.post('/api/telegram/sync', requireAdminSession, async (req, res) => {
   }
 });
 
-router.post('/settings', requireAdminSession, express.urlencoded({ extended: true }), (req, res) => {
+router.post('/settings', requireAdminSession, restrictToAdmin, express.urlencoded({ extended: true }), (req, res) => {
   try {
     const newSettings = { ...req.body };
+    if (!newSettings.admin_password || process.env.ADMIN_PASSWORD) delete newSettings.admin_password;
+    else if (String(newSettings.admin_password).length < 12 || newSettings.admin_password === 'admin123') {
+      throw new Error('Password admin baru minimal 12 karakter dan tidak boleh memakai password bawaan.');
+    }
     if (newSettings.whatsapp_enabled === 'true') newSettings.whatsapp_enabled = true;
     else if (newSettings.whatsapp_enabled === 'false') newSettings.whatsapp_enabled = false;
 
@@ -4528,7 +4534,7 @@ router.post('/settings', requireAdminSession, express.urlencoded({ extended: tru
 });
 
 // ─── BACKUP & RECOVERY ──────────────────────────────────────────────────────
-router.get('/backup', requireAdminSession, requireSidebarMenuAccess('backup'), (req, res) => {
+router.get('/backup', requireAdminSession, restrictToAdmin, requireSidebarMenuAccess('backup'), (req, res) => {
   const result = backupSvc.listBackups();
   res.render('admin/backup', {
     title: 'Backup & Recovery',
@@ -4541,12 +4547,12 @@ router.get('/backup', requireAdminSession, requireSidebarMenuAccess('backup'), (
   });
 });
 
-router.get('/backup/download/:fileName', requireAdminSession, (req, res) => {
+router.get('/backup/download/:fileName', requireAdminSession, restrictToAdmin, (req, res) => {
   try {
     const rawFileName = req.params.fileName;
-    const fileName = path.basename(rawFileName);
+    const fileName = String(rawFileName || '');
     const backupDir = path.join(__dirname, '../backups');
-    const filePath = path.join(backupDir, fileName);
+    const filePath = backupSvc.resolveBackupFile(fileName);
 
     if (!fs.existsSync(filePath)) {
       req.session._msg = { type: 'error', text: 'File backup tidak ditemukan.' };
@@ -4567,7 +4573,7 @@ router.get('/backup/download/:fileName', requireAdminSession, (req, res) => {
   }
 });
 
-router.post('/backup/create', requireAdminSession, express.urlencoded({ extended: true }), (req, res) => {
+router.post('/backup/create', requireAdminSession, restrictToAdmin, express.urlencoded({ extended: true }), (req, res) => {
   try {
     const { type } = req.body;
     let result;
@@ -4594,7 +4600,7 @@ router.post('/backup/create', requireAdminSession, express.urlencoded({ extended
   res.redirect('/admin/backup');
 });
 
-router.post('/backup/restore', requireAdminSession, express.urlencoded({ extended: true }), (req, res) => {
+router.post('/backup/restore', requireAdminSession, restrictToAdmin, express.urlencoded({ extended: true }), (req, res) => {
   try {
     const { fileName, type } = req.body;
     let result;
@@ -4619,7 +4625,7 @@ router.post('/backup/restore', requireAdminSession, express.urlencoded({ extende
   res.redirect('/admin/backup');
 });
 
-router.post('/backup/upload-restore', requireAdminSession, upload.single('backupFile'), (req, res) => {
+router.post('/backup/upload-restore', requireAdminSession, restrictToAdmin, upload.single('backupFile'), (req, res) => {
   try {
     const file = req.file;
     if (!file || !file.buffer || !file.originalname) {
@@ -4639,13 +4645,13 @@ router.post('/backup/upload-restore', requireAdminSession, upload.single('backup
     let savedFileName = '';
 
     if (ext === '.db' || ext === '.sqlite' || originalName.includes('billing_db')) {
-      savedFileName = `uploaded_db_${timestamp}_${originalName}`;
-      const savePath = path.join(backupDir, savedFileName);
+      savedFileName = `uploaded_db_${timestamp}.db`;
+      const savePath = backupSvc.resolveBackupFile(savedFileName);
       fs.writeFileSync(savePath, file.buffer);
       result = backupSvc.restoreDatabase(savedFileName);
     } else if (ext === '.json' || originalName.includes('settings')) {
-      savedFileName = `uploaded_settings_${timestamp}_${originalName}`;
-      const savePath = path.join(backupDir, savedFileName);
+      savedFileName = `uploaded_settings_${timestamp}.json`;
+      const savePath = backupSvc.resolveBackupFile(savedFileName);
       fs.writeFileSync(savePath, file.buffer);
 
       // Verify JSON validity before restoring settings
@@ -4676,13 +4682,13 @@ router.post('/backup/upload-restore', requireAdminSession, upload.single('backup
   res.redirect('/admin/backup');
 });
 
-router.post('/backup/delete', requireAdminSession, express.urlencoded({ extended: true }), (req, res) => {
+router.post('/backup/delete', requireAdminSession, restrictToAdmin, express.urlencoded({ extended: true }), (req, res) => {
   try {
     const { fileName } = req.body;
     const fs = require('fs');
     const path = require('path');
     const backupDir = path.join(__dirname, '../backups');
-    const backupFilePath = path.join(backupDir, fileName);
+    const backupFilePath = backupSvc.resolveBackupFile(fileName);
 
     if (!fs.existsSync(backupFilePath)) {
       req.session._msg = { type: 'error', text: 'File backup tidak ditemukan' };
@@ -4698,7 +4704,7 @@ router.post('/backup/delete', requireAdminSession, express.urlencoded({ extended
   res.redirect('/admin/backup');
 });
 
-router.post('/backup/cleanup', requireAdminSession, express.urlencoded({ extended: true }), (req, res) => {
+router.post('/backup/cleanup', requireAdminSession, restrictToAdmin, express.urlencoded({ extended: true }), (req, res) => {
   try {
     const { retentionDays } = req.body;
     const result = backupSvc.cleanupOldBackups(parseInt(retentionDays) || 30);
@@ -4837,7 +4843,7 @@ router.get('/api/metrics/history', requireAdmin, (req, res) => {
 });
 
 // ─── GENIEACS SETTINGS API ──────────────────────────────────────────────────
-router.post('/api/genieacs/settings', requireAdmin, async (req, res) => {
+router.post('/api/genieacs/settings', requireNetworkAdmin, async (req, res) => {
   try {
     const { genieacs_timeout, genieacs_rxpower_threshold, genieacs_monitoring_interval, genieacs_monitoring_enabled } = req.body;
     
@@ -4901,7 +4907,7 @@ router.post('/api/genieacs/settings', requireAdmin, async (req, res) => {
   }
 });
 
-router.get('/api/genieacs/test', requireAdmin, async (req, res) => {
+router.get('/api/genieacs/test', requireNetworkAdmin, async (req, res) => {
   try {
     const genieacs = require('../config/genieacs');
     const devices = await genieacs.getDevices();
@@ -4947,7 +4953,7 @@ router.get('/api/stats', requireAdmin, async (req, res) => {
   }
 });
 
-router.get('/api/devices', requireAdmin, async (req, res) => {
+router.get('/api/devices', requireNetworkAdmin, async (req, res) => {
   try {
     const { search, status, limit = 999999, offset = 0 } = req.query;
     const result = await customerDevice.listAllDevices(999999);
@@ -5010,7 +5016,7 @@ router.get('/api/devices', requireAdmin, async (req, res) => {
   }
 });
 
-router.get('/api/device/:tag', requireAdmin, async (req, res) => {
+router.get('/api/device/:tag', requireNetworkAdmin, async (req, res) => {
   try {
     const data = await customerDevice.getCustomerDeviceData(req.params.tag);
     if (!data || data.status === 'Tidak ditemukan') return res.status(404).json({ error: 'Device not found' });
@@ -5020,7 +5026,7 @@ router.get('/api/device/:tag', requireAdmin, async (req, res) => {
   }
 });
 
-router.post('/api/device/:tag/ssid', requireAdmin, express.json(), async (req, res) => {
+router.post('/api/device/:tag/ssid', requireNetworkAdmin, express.json(), async (req, res) => {
   const { ssid } = req.body;
   if (!ssid) return res.status(400).json({ error: 'SSID required' });
   const ok = await customerDevice.updateSSID(req.params.tag, ssid);
@@ -5045,7 +5051,7 @@ router.post('/api/device/:tag/ssid', requireAdmin, express.json(), async (req, r
   res.json({ success: ok });
 });
 
-router.post('/api/device/:tag/password', requireAdmin, express.json(), async (req, res) => {
+router.post('/api/device/:tag/password', requireNetworkAdmin, express.json(), async (req, res) => {
   const { password } = req.body;
   if (!password || password.length < 8) return res.status(400).json({ error: 'Password minimal 8 karakter' });
   const ok = await customerDevice.updatePassword(req.params.tag, password);
@@ -5070,12 +5076,12 @@ router.post('/api/device/:tag/password', requireAdmin, express.json(), async (re
   res.json({ success: ok });
 });
 
-router.post('/api/device/:tag/reboot', requireAdmin, async (req, res) => {
+router.post('/api/device/:tag/reboot', requireNetworkAdmin, async (req, res) => {
   const result = await customerDevice.requestReboot(req.params.tag);
   res.json(result);
 });
 
-router.post('/api/bulk/ssid', requireAdmin, express.json(), async (req, res) => {
+router.post('/api/bulk/ssid', requireNetworkAdmin, express.json(), async (req, res) => {
   const { tags, ssid } = req.body;
   if (!Array.isArray(tags) || !ssid) return res.status(400).json({ error: 'Tags and SSID required' });
   const results = [];
@@ -5106,7 +5112,7 @@ router.post('/api/bulk/ssid', requireAdmin, express.json(), async (req, res) => 
   res.json({ results, total: tags.length, success: results.filter(r => r.success).length });
 });
 
-router.get('/api/mikrotik/profiles', requireAdmin, async (req, res) => {
+router.get('/api/mikrotik/profiles', requireNetworkAdmin, async (req, res) => {
   try {
     const profiles = await mikrotikService.getPppoeProfiles(req.query.routerId);
     res.json(profiles);
@@ -5115,7 +5121,7 @@ router.get('/api/mikrotik/profiles', requireAdmin, async (req, res) => {
   }
 });
 
-router.get('/api/mikrotik/users', requireAdmin, async (req, res) => {
+router.get('/api/mikrotik/users', requireNetworkAdmin, async (req, res) => {
   try {
     const routerId = req.query.routerId ? Number(req.query.routerId) : null;
     const onlyUnused = String(req.query.onlyUnused || '') === '1';
@@ -5135,7 +5141,7 @@ router.get('/api/mikrotik/users', requireAdmin, async (req, res) => {
 });
 
 // ─── MIKROTIK MONITORING ───────────────────────────────────────────────────
-router.get('/mikrotik', requireAdminSession, requireSidebarMenuAccess('mikrotik'), (req, res) => {
+router.get('/mikrotik', requireAdminSession, restrictToAdmin, requireSidebarMenuAccess('mikrotik'), (req, res) => {
   const dbRouters = mikrotikService.getAllRouters();
   const settings = getSettings();
   const settingsRouter = {
@@ -5156,7 +5162,7 @@ router.get('/mikrotik', requireAdminSession, requireSidebarMenuAccess('mikrotik'
   });
 });
 
-router.get('/mikrotik/display', requireAdminSession, (req, res) => {
+router.get('/mikrotik/display', requireAdminSession, restrictToAdmin, (req, res) => {
   const routers = mikrotikService.getAllRouters();
   const settings = getSettings();
   const defaultRouter = {
@@ -5219,7 +5225,7 @@ router.post('/api/vouchers/template', requireAdminSession, restrictToAdmin, expr
   }
 });
 
-router.get('/api/webhook/payment-notif/logs', requireAdminSession, (req, res) => {
+router.get('/api/webhook/payment-notif/logs', requireAdminSession, restrictToAdmin, (req, res) => {
   try {
     const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 200));
     const service = String(req.query.service || '').trim();
@@ -5557,7 +5563,7 @@ router.get('/vouchers/batches/:id/export.csv', requireAdminSession, (req, res) =
   res.send(lines.join('\n'));
 });
 
-router.get('/api/vouchers/batches', requireAdmin, (req, res) => {
+router.get('/api/vouchers/batches', requireNetworkAdmin, (req, res) => {
   const routerId = req.query.routerId ? Number(req.query.routerId) : null;
   const rows = db.prepare(`
     SELECT
@@ -5574,7 +5580,7 @@ router.get('/api/vouchers/batches', requireAdmin, (req, res) => {
   res.json(rows);
 });
 
-router.get('/api/vouchers/batches/:id', requireAdmin, (req, res) => {
+router.get('/api/vouchers/batches/:id', requireNetworkAdmin, (req, res) => {
   const batchId = Number(req.params.id);
   const batch = db.prepare(`
     SELECT
@@ -5598,7 +5604,7 @@ router.get('/api/vouchers/batches/:id', requireAdmin, (req, res) => {
   res.json({ batch, vouchers });
 });
 
-router.post('/api/vouchers/batches', requireAdmin, express.json(), async (req, res) => {
+router.post('/api/vouchers/batches', requireNetworkAdmin, express.json(), async (req, res) => {
   try {
     const routerId = req.query.routerId ? Number(req.query.routerId) : null;
     const profileName = String(req.body.profile || '').trim();
@@ -5685,7 +5691,7 @@ router.post('/api/vouchers/batches', requireAdmin, express.json(), async (req, r
   }
 });
 
-router.post('/api/vouchers/batches/:id/sync', requireAdmin, async (req, res) => {
+router.post('/api/vouchers/batches/:id/sync', requireNetworkAdmin, async (req, res) => {
   try {
     const batchId = Number(req.params.id);
     const batch = db.prepare('SELECT * FROM voucher_batches WHERE id = ?').get(batchId);
@@ -5735,7 +5741,7 @@ router.post('/api/vouchers/batches/:id/sync', requireAdmin, async (req, res) => 
   }
 });
 
-router.post('/api/vouchers/batches/:id/delete', requireAdmin, async (req, res) => {
+router.post('/api/vouchers/batches/:id/delete', requireNetworkAdmin, async (req, res) => {
   try {
     const batchId = Number(req.params.id);
     if (!batchId) return res.status(400).json({ error: 'Batch ID tidak valid' });
@@ -5761,35 +5767,35 @@ router.post('/api/vouchers/batches/:id/delete', requireAdmin, async (req, res) =
   }
 });
 
-router.get('/api/mikrotik/secrets', requireAdmin, async (req, res) => {
+router.get('/api/mikrotik/secrets', requireNetworkAdmin, async (req, res) => {
   try { res.json(await mikrotikService.getPppoeSecrets(req.query.routerId)); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-router.post('/api/mikrotik/secrets', requireAdmin, express.json(), async (req, res) => {
+router.post('/api/mikrotik/secrets', requireNetworkAdmin, express.json(), async (req, res) => {
   try { await mikrotikService.addPppoeSecret(req.body, req.query.routerId); res.json({ success: true }); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-router.post('/api/mikrotik/secrets/:id/update', requireAdmin, express.json(), async (req, res) => {
+router.post('/api/mikrotik/secrets/:id/update', requireNetworkAdmin, express.json(), async (req, res) => {
   try { await mikrotikService.updatePppoeSecret(req.params.id, req.body, req.query.routerId); res.json({ success: true }); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-router.post('/api/mikrotik/secrets/:id/delete', requireAdmin, async (req, res) => {
+router.post('/api/mikrotik/secrets/:id/delete', requireNetworkAdmin, async (req, res) => {
   try { await mikrotikService.deletePppoeSecret(req.params.id, req.query.routerId); res.json({ success: true }); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-router.get('/api/mikrotik/hotspot-users', requireAdmin, async (req, res) => {
+router.get('/api/mikrotik/hotspot-users', requireNetworkAdmin, async (req, res) => {
   try { res.json(await mikrotikService.getHotspotUsers(req.query.routerId)); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-router.post('/api/mikrotik/hotspot-users', requireAdmin, express.json(), async (req, res) => {
+router.post('/api/mikrotik/hotspot-users', requireNetworkAdmin, express.json(), async (req, res) => {
   try { await mikrotikService.addHotspotUser(req.body, req.query.routerId); res.json({ success: true }); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-router.post('/api/mikrotik/hotspot-users/:id/update', requireAdmin, express.json(), async (req, res) => {
+router.post('/api/mikrotik/hotspot-users/:id/update', requireNetworkAdmin, express.json(), async (req, res) => {
   try { await mikrotikService.updateHotspotUser(req.params.id, req.body, req.query.routerId); res.json({ success: true }); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-router.post('/api/mikrotik/hotspot-users/:id/delete', requireAdmin, async (req, res) => {
+router.post('/api/mikrotik/hotspot-users/:id/delete', requireNetworkAdmin, async (req, res) => {
   try { await mikrotikService.deleteHotspotUser(req.params.id, req.query.routerId); res.json({ success: true }); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -5893,35 +5899,35 @@ router.get('/api/mikrotik/monitoring-display-data', requireAdmin, async (req, re
   }
 });
 
-router.get('/api/mikrotik/hotspot-profiles', requireAdmin, async (req, res) => {
+router.get('/api/mikrotik/hotspot-profiles', requireNetworkAdmin, async (req, res) => {
   try { res.json(await mikrotikService.getHotspotProfiles(req.query.routerId)); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-router.get('/api/mikrotik/active-pppoe', requireAdmin, async (req, res) => {
+router.get('/api/mikrotik/active-pppoe', requireNetworkAdmin, async (req, res) => {
   try { res.json(await mikrotikService.getPppoeActive(req.query.routerId)); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-router.get('/api/mikrotik/active-hotspot', requireAdmin, async (req, res) => {
+router.get('/api/mikrotik/active-hotspot', requireNetworkAdmin, async (req, res) => {
   try { res.json(await mikrotikService.getHotspotActive(req.query.routerId)); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-router.get('/api/mikrotik/ip-pools', requireAdmin, async (req, res) => {
+router.get('/api/mikrotik/ip-pools', requireNetworkAdmin, async (req, res) => {
   try { res.json(await mikrotikService.getIpPools(req.query.routerId)); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // PPPoE Profiles CRUD
-router.post('/api/mikrotik/pppoe-profiles', requireAdmin, express.json(), async (req, res) => {
+router.post('/api/mikrotik/pppoe-profiles', requireNetworkAdmin, express.json(), async (req, res) => {
   try { await mikrotikService.addPppoeProfile(req.body, req.query.routerId); res.json({ success: true }); } catch (e) { res.status(500).json({ error: e.message }); }
 });
-router.post('/api/mikrotik/pppoe-profiles/:id/update', requireAdmin, express.json(), async (req, res) => {
+router.post('/api/mikrotik/pppoe-profiles/:id/update', requireNetworkAdmin, express.json(), async (req, res) => {
   try { await mikrotikService.updatePppoeProfile(req.params.id, req.body, req.query.routerId); res.json({ success: true }); } catch (e) { res.status(500).json({ error: e.message }); }
 });
-router.post('/api/mikrotik/pppoe-profiles/:id/delete', requireAdmin, async (req, res) => {
+router.post('/api/mikrotik/pppoe-profiles/:id/delete', requireNetworkAdmin, async (req, res) => {
   try { await mikrotikService.deletePppoeProfile(req.params.id, req.query.routerId); res.json({ success: true }); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Hotspot User Profiles CRUD
-router.get('/api/mikrotik/hotspot-user-profiles', requireAdmin, async (req, res) => {
+router.get('/api/mikrotik/hotspot-user-profiles', requireNetworkAdmin, async (req, res) => {
   try {
     const rows = await mikrotikService.getHotspotUserProfiles(req.query.routerId);
     res.json((Array.isArray(rows) ? rows : []).map((r) => ({ ...r, id: r.id || r['.id'] })));
@@ -5929,7 +5935,7 @@ router.get('/api/mikrotik/hotspot-user-profiles', requireAdmin, async (req, res)
     res.status(500).json({ error: e.message });
   }
 });
-router.get('/api/mikrotik/hotspot-user-profiles/:id', requireAdmin, async (req, res) => {
+router.get('/api/mikrotik/hotspot-user-profiles/:id', requireNetworkAdmin, async (req, res) => {
   try {
     const row = await mikrotikService.getHotspotUserProfileById(req.params.id, req.query.routerId);
     if (!row) return res.status(404).json({ error: 'Profile tidak ditemukan' });
@@ -5938,17 +5944,17 @@ router.get('/api/mikrotik/hotspot-user-profiles/:id', requireAdmin, async (req, 
     return res.status(500).json({ error: e.message });
   }
 });
-router.post('/api/mikrotik/hotspot-user-profiles', requireAdmin, express.json(), async (req, res) => {
+router.post('/api/mikrotik/hotspot-user-profiles', requireNetworkAdmin, express.json(), async (req, res) => {
   try { await mikrotikService.addHotspotUserProfile(req.body, req.query.routerId); res.json({ success: true }); } catch (e) { res.status(500).json({ error: e.message }); }
 });
-router.post('/api/mikrotik/hotspot-user-profiles/:id/update', requireAdmin, express.json(), async (req, res) => {
+router.post('/api/mikrotik/hotspot-user-profiles/:id/update', requireNetworkAdmin, express.json(), async (req, res) => {
   try { await mikrotikService.updateHotspotUserProfile(req.params.id, req.body, req.query.routerId); res.json({ success: true }); } catch (e) { res.status(500).json({ error: e.message }); }
 });
-router.post('/api/mikrotik/hotspot-user-profiles/:id/delete', requireAdmin, async (req, res) => {
+router.post('/api/mikrotik/hotspot-user-profiles/:id/delete', requireNetworkAdmin, async (req, res) => {
   try { await mikrotikService.deleteHotspotUserProfile(req.params.id, req.query.routerId); res.json({ success: true }); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-router.get('/api/mikrotik/backup', requireAdmin, async (req, res) => {
+router.get('/api/mikrotik/backup', requireNetworkAdmin, async (req, res) => {
   try {
     const backup = await mikrotikService.getBackup(req.query.routerId);
     res.setHeader('Content-disposition', 'attachment; filename=mikrotik_backup_' + new Date().toISOString().slice(0,10) + '.rsc');
@@ -6105,7 +6111,7 @@ router.get('/whatsapp', requireAdminSession, requireSidebarMenuAccess('whatsapp'
   });
 });
 
-router.post('/whatsapp/gateway-settings', requireAdminSession, express.urlencoded({ extended: true }), async (req, res) => {
+router.post('/whatsapp/gateway-settings', requireAdminSession, restrictToAdmin, express.urlencoded({ extended: true }), async (req, res) => {
   try {
     const {
       wa_gateway_type,
@@ -6274,7 +6280,7 @@ router.get('/api/whatsapp/broadcast-status', requireAdminSession, (req, res) => 
 });
 
 // API: Pause Broadcast
-router.post('/api/whatsapp/broadcast-pause', requireAdminSession, (req, res) => {
+router.post('/api/whatsapp/broadcast-pause', requireAdminSession, restrictToAdmin, (req, res) => {
   if (!global.broadcastStatus.active) {
     return res.json({ ok: false, error: 'Tidak ada broadcast yang sedang berjalan.' });
   }
@@ -6284,7 +6290,7 @@ router.post('/api/whatsapp/broadcast-pause', requireAdminSession, (req, res) => 
 });
 
 // API: Resume Broadcast
-router.post('/api/whatsapp/broadcast-resume', requireAdminSession, (req, res) => {
+router.post('/api/whatsapp/broadcast-resume', requireAdminSession, restrictToAdmin, (req, res) => {
   if (!global.broadcastStatus.active) {
     return res.json({ ok: false, error: 'Tidak ada broadcast yang sedang berjalan.' });
   }
@@ -6294,7 +6300,7 @@ router.post('/api/whatsapp/broadcast-resume', requireAdminSession, (req, res) =>
 });
 
 // API: Stop Broadcast
-router.post('/api/whatsapp/broadcast-stop', requireAdminSession, (req, res) => {
+router.post('/api/whatsapp/broadcast-stop', requireAdminSession, restrictToAdmin, (req, res) => {
   if (!global.broadcastStatus.active) {
     return res.json({ ok: false, error: 'Tidak ada broadcast yang sedang berjalan.' });
   }
@@ -6304,7 +6310,7 @@ router.post('/api/whatsapp/broadcast-stop', requireAdminSession, (req, res) => {
   res.json({ ok: true, message: 'Broadcast berhasil dihentikan.' });
 });
 
-router.post('/whatsapp/broadcast', requireAdminSession, express.urlencoded({ extended: true }), async (req, res) => {
+router.post('/whatsapp/broadcast', requireAdminSession, restrictToAdmin, express.urlencoded({ extended: true }), async (req, res) => {
   try {
     const { target, message, delay: customDelay, batchSize: customBatchSize, hourlyLimit: customHourlyLimit } = req.body;
     if (!message) throw new Error('Pesan tidak boleh kosong');
@@ -6672,7 +6678,7 @@ router.post('/whatsapp/test-notification', requireAdminSession, async (req, res)
   res.redirect('/admin/whatsapp');
 });
 
-router.post('/whatsapp/reset', requireAdminSession, (req, res) => {
+router.post('/whatsapp/reset', requireAdminSession, restrictToAdmin, (req, res) => {
   try {
     const authFolder = getSetting('whatsapp_auth_folder', 'auth_info_baileys');
     const folderPath = path.resolve(__dirname, '..', authFolder);
@@ -6698,7 +6704,7 @@ router.post('/whatsapp/reset', requireAdminSession, (req, res) => {
   }
 });
 
-router.post('/whatsapp/repair-keys', requireAdminSession, async (req, res) => {
+router.post('/whatsapp/repair-keys', requireAdminSession, restrictToAdmin, async (req, res) => {
   try {
     const { cleanStaleSessionKeys, restartWhatsAppBot } = await import('../services/whatsappBot.mjs');
     const cleaned = cleanStaleSessionKeys();
@@ -6716,7 +6722,7 @@ router.post('/whatsapp/repair-keys', requireAdminSession, async (req, res) => {
 });
 
 // ─── ROUTERS (MULTI-ROUTER) ──────────────────────────────────────────────────
-router.get('/routers', requireAdminSession, requireSidebarMenuAccess('mikrotik'), (req, res) => {
+router.get('/routers', requireAdminSession, restrictToAdmin, requireSidebarMenuAccess('mikrotik'), (req, res) => {
   res.render('admin/routers', {
     title: 'Manajemen Router', company: company(), activePage: 'mikrotik',
     routers: mikrotikService.getAllRouters(), msg: flashMsg(req)
@@ -6871,7 +6877,7 @@ router.post('/promo-slides/:id/delete', requireAdminSession, requireSidebarMenuA
   res.redirect('/admin/promo-slides');
 });
 
-router.post('/routers', requireAdminSession, express.urlencoded({ extended: true }), (req, res) => {
+router.post('/routers', requireAdminSession, restrictToAdmin, express.urlencoded({ extended: true }), (req, res) => {
   try {
     mikrotikService.createRouter(req.body);
     req.session._msg = { type: 'success', text: `Router "${req.body.name}" berhasil ditambahkan.` };
@@ -6881,7 +6887,7 @@ router.post('/routers', requireAdminSession, express.urlencoded({ extended: true
   res.redirect('/admin/routers');
 });
 
-router.post('/routers/:id/update', requireAdminSession, express.urlencoded({ extended: true }), (req, res) => {
+router.post('/routers/:id/update', requireAdminSession, restrictToAdmin, express.urlencoded({ extended: true }), (req, res) => {
   try {
     mikrotikService.updateRouter(req.params.id, req.body);
     req.session._msg = { type: 'success', text: 'Router berhasil diperbarui.' };
@@ -6891,7 +6897,7 @@ router.post('/routers/:id/update', requireAdminSession, express.urlencoded({ ext
   res.redirect('/admin/routers');
 });
 
-router.post('/routers/:id/delete', requireAdminSession, (req, res) => {
+router.post('/routers/:id/delete', requireAdminSession, restrictToAdmin, (req, res) => {
   try {
     mikrotikService.deleteRouter(req.params.id);
     req.session._msg = { type: 'success', text: 'Router berhasil dihapus.' };
@@ -6901,7 +6907,7 @@ router.post('/routers/:id/delete', requireAdminSession, (req, res) => {
   res.redirect('/admin/routers');
 });
 
-router.get('/api/routers/:id/test', requireAdmin, async (req, res) => {
+router.get('/api/routers/:id/test', requireNetworkAdmin, async (req, res) => {
   try {
     const conn = await mikrotikService.getConnection(req.params.id);
     if (conn && conn.api) {
@@ -6914,7 +6920,7 @@ router.get('/api/routers/:id/test', requireAdmin, async (req, res) => {
   }
 });
 
-router.get('/api/routers/:id/details', requireAdmin, async (req, res) => {
+router.get('/api/routers/:id/details', requireNetworkAdmin, async (req, res) => {
   try {
     const routerId = req.params.id;
     const routerConfig = mikrotikService.getRouterById(routerId);
@@ -7013,7 +7019,7 @@ router.get('/api/routers/:id/details', requireAdmin, async (req, res) => {
   }
 });
 
-router.post('/api/routers/:id/setup-firewall', requireAdmin, async (req, res) => {
+router.post('/api/routers/:id/setup-firewall', requireNetworkAdmin, async (req, res) => {
   try {
     const result = await mikrotikService.setupIsolirFirewall(req.params.id);
     res.json(result);
@@ -7057,7 +7063,7 @@ router.post('/api/system/update', requireAdmin, async (req, res) => {
   });
 });
 
-router.get('/api/mikrotik/profiles/:routerId', requireAdmin, async (req, res) => {
+router.get('/api/mikrotik/profiles/:routerId', requireNetworkAdmin, async (req, res) => {
   try {
     const profiles = await mikrotikService.getPppoeProfiles(req.params.routerId);
     res.json(profiles);
@@ -7066,7 +7072,7 @@ router.get('/api/mikrotik/profiles/:routerId', requireAdmin, async (req, res) =>
   }
 });
 
-router.get('/api/mikrotik/users/:routerId', requireAdmin, async (req, res) => {
+router.get('/api/mikrotik/users/:routerId', requireNetworkAdmin, async (req, res) => {
   try {
     const routerId = req.params.routerId ? Number(req.params.routerId) : null;
     const onlyUnused = String(req.query.onlyUnused || '') === '1';
@@ -7203,7 +7209,7 @@ router.post('/attendance/:id/delete', requireAdminSession, (req, res) => {
 });
 
 // Export attendance to Excel
-router.get('/attendance/export', requireAdminSession, (req, res) => {
+router.get('/attendance/export', requireAdminSession, async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
     if (!startDate || !endDate) {
@@ -7230,11 +7236,7 @@ router.get('/attendance/export', requireAdminSession, (req, res) => {
       'Status': a.status
     }));
     
-    const ws = XLSX.utils.json_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Absensi');
-    
-    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const buffer = await exportRowsToXlsx(data, 'Absensi');
     
     res.setHeader('Content-Disposition', `attachment; filename=absensi_${startDate}_${endDate}.xlsx`);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
