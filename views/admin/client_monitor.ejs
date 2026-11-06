@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="<%= lang || 'id' %>
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Pemantauan Client | <%= company %></title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="/css/admin.css">
+  <style>
+    .cm-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:18px}
+    .cm-head h1{font-size:23px;line-height:1.2;margin-bottom:6px}
+    .cm-muted{color:var(--muted);font-size:12px;line-height:1.5}
+    .cm-overview{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid var(--border);border-radius:10px;background:var(--bg2);margin-bottom:18px}
+    .cm-overview>div{padding:15px 18px;min-width:0}
+    .cm-overview>div+div{border-left:1px solid var(--border)}
+    .cm-overview span{display:block;color:var(--muted);font-size:11px;margin-bottom:7px}
+    .cm-overview strong{font-size:21px;font-weight:650;line-height:1.2;overflow-wrap:anywhere}
+    .cm-layout{display:grid;grid-template-columns:minmax(0,1.75fr) minmax(330px,1fr);gap:16px;align-items:start}
+    .cm-panel{background:var(--bg2);border:1px solid var(--border);border-radius:10px;min-width:0;overflow:hidden}
+    .cm-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border)}
+    .cm-toolbar h2{font-size:14px;font-weight:650}
+    .cm-search{display:flex;gap:7px;max-width:310px;flex:1}
+    .cm-search input{min-width:0;flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:7px;padding:8px 10px;font:inherit;font-size:12px}
+    .cm-search button{padding:7px 12px}
+    .cm-table{width:100%;border-collapse:collapse;font-size:12px}
+    .cm-table th{font-size:10px;color:var(--muted);font-weight:600;text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap}
+    .cm-table td{padding:11px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+    .cm-table tbody tr:last-child td{border-bottom:0}
+    .cm-table tbody tr:hover,.cm-table tbody tr.is-selected{background:var(--bg3)}
+    .cm-name{color:var(--text);font-weight:650;text-decoration:none;display:block;margin-bottom:4px}
+    .cm-name:hover{color:var(--info)}
+    .cm-code{color:var(--muted);font-size:11px;word-break:break-all}
+    .cm-status{display:inline-flex;align-items:center;gap:5px;color:var(--muted);font-size:11px;margin-top:5px}
+    .cm-status::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--muted)}
+    .cm-status.online{color:var(--success)}.cm-status.online::before{background:var(--success)}
+    .cm-pair{display:flex;justify-content:space-between;gap:8px;white-space:nowrap}
+    .cm-pair+ .cm-pair{margin-top:4px}
+    .cm-pair small{color:var(--muted)}
+    .cm-num{font-variant-numeric:tabular-nums}
+    .cm-mobile-list{display:none}
+    .cm-empty{padding:28px 18px;color:var(--muted);line-height:1.5}
+    .cm-pages{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:11px 16px;border-top:1px solid var(--border);color:var(--muted);font-size:11px}
+    .cm-pages a{color:var(--text);text-decoration:none;border:1px solid var(--border);padding:6px 9px;border-radius:6px}
+    .cm-pages a:hover{border-color:var(--primary)}
+    .cm-detail{padding:17px}
+    .cm-detail h2{font-size:17px;line-height:1.3;margin-bottom:4px}
+    .cm-detail-top{border-bottom:1px solid var(--border);padding-bottom:15px;margin-bottom:15px}
+    .cm-detail-top .cm-status{margin-top:9px}
+    .cm-ident{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:17px}
+    .cm-ident dt{font-size:10px;color:var(--muted);margin-bottom:3px}
+    .cm-ident dd{font-size:12px;word-break:break-word}
+    .cm-ident a{color:var(--info);text-decoration:none}
+    .cm-periods{display:flex;gap:5px;margin-bottom:15px}
+    .cm-periods a{flex:1;text-align:center;padding:7px 3px;border:1px solid var(--border);border-radius:6px;color:var(--muted);text-decoration:none;font-size:11px}
+    .cm-periods a.active{color:var(--text);background:var(--bg3);border-color:var(--primary)}
+    .cm-usage{display:grid;grid-template-columns:1fr 1fr;gap:13px;padding:13px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+    .cm-usage span{display:block;color:var(--muted);font-size:11px;margin-bottom:5px}
+    .cm-usage strong{font-size:20px;font-weight:650;font-variant-numeric:tabular-nums}
+    .cm-usage .download{color:var(--info)}.cm-usage .upload{color:var(--success)}
+    .cm-assessment{padding:13px 0 15px;border-bottom:1px solid var(--border)}
+    .cm-assessment strong{display:block;font-size:12px;margin-bottom:4px}
+    .cm-assessment.warning strong{color:var(--warning)}.cm-assessment.normal strong{color:var(--success)}
+    .cm-chart-title{display:flex;justify-content:space-between;gap:8px;align-items:center;font-size:12px;font-weight:600;margin:17px 0 8px}
+    .cm-chart{height:126px;display:flex;align-items:end;gap:3px;border-bottom:1px solid var(--border);padding-bottom:1px}
+    .cm-bar{flex:1;min-width:3px;display:flex;flex-direction:column;justify-content:end;height:100%;background:var(--bg3);border-radius:2px 2px 0 0;overflow:hidden}
+    .cm-bar .up{background:var(--success);min-height:0}.cm-bar .down{background:var(--info);min-height:0}
+    .cm-chart-legend{display:flex;gap:13px;margin-top:8px;color:var(--muted);font-size:10px}
+    .cm-chart-legend i{font-size:8px;margin-right:4px}.cm-chart-legend .dl{color:var(--info)}.cm-chart-legend .ul{color:var(--success)}
+    .cm-note{margin-top:15px;color:var(--muted);font-size:11px;line-height:1.5}
+    .cm-mobile-card{display:block;padding:13px 15px;border-bottom:1px solid var(--border)}
+    .cm-mobile-card:last-child{border-bottom:0}
+    .cm-mobile-meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+    .cm-mobile-meta span{display:block;color:var(--muted);font-size:10px;margin-bottom:3px}
+    .cm-mobile-meta strong{font-size:12px;font-weight:550}
+    @media(max-width:1180px){.cm-layout{grid-template-columns:minmax(0,1fr)}.cm-detail{max-width:none}}
+    @media(max-width:760px){.cm-head{flex-direction:column}.cm-overview{grid-template-columns:repeat(2,minmax(0,1fr))}.cm-overview>div:nth-child(3){border-left:0;border-top:1px solid var(--border)}.cm-overview>div:nth-child(4){border-top:1px solid var(--border)}.cm-overview strong{font-size:18px}.cm-toolbar{flex-direction:column;align-items:stretch}.cm-search{max-width:none}.cm-table-wrap{display:none}.cm-mobile-list{display:block}}
+  </style>
+</head>
+<body>
+<%- include('partials/sidebar', { activePage: 'client_monitor', company }) %>
+<%
+  const number = new Intl.NumberFormat('id-ID', { maximumFractionDigits: 1 });
+  const rate = new Intl.NumberFormat('id-ID', { maximumFractionDigits: 2 });
+  const bytes = (value) => {
+    const n = Number(value || 0);
+    if (n >= 1024 ** 4) return `${number.format(n / 1024 ** 4)} TB`;
+    if (n >= 1024 ** 3) return `${number.format(n / 1024 ** 3)} GB`;
+    if (n >= 1024 ** 2) return `${number.format(n / 1024 ** 2)} MB`;
+    return `${number.format(n / 1024)} KB`;
+  };
+  const mbps = (value, online) => online && value !== null && value !== undefined ? `${rate.format(value / 1e6)} Mbps` : '—';
+  const time = (value) => { const d = new Date(value); return value && !Number.isNaN(d.getTime()) ? d.toLocaleString('id-ID', { timeZone: timezone, dateStyle: 'medium', timeStyle: 'short' }) : '—'; };
+  const ontFresh = (value) => value && Date.now() - new Date(value).getTime() < 20 * 60 * 1000;
+  const linkTo = (id, days) => `/admin/client-monitor?customer=${id}&days=${days || 7}&page=${list.page}&search=${encodeURIComponent(list.search)}`;
+  const selectedId = detail && detail.customer.id;
+%>
+<div class="mw">
+  <div class="topbar">
+    <div class="tb-title"><button class="hb-menu" onclick="toggleSidebar()" aria-label="Buka menu"><i class="bi bi-list"></i></button><i class="bi bi-activity"></i> Pemantauan Client</div>
+    <div class="tb-right"><span class="adm-badge"><%= typeof session !== 'undefined' && session?.isCashier ? 'Kasir' : 'Admin' %></span><a href="/admin/logout" class="btn btn-g btn-sm" aria-label="Keluar"><i class="bi bi-box-arrow-left"></i></a></div>
+  </div>
+  <main class="page">
+    <div class="cm-head">
+      <div><h1>Pemantauan Client</h1><p class="cm-muted">Sesi PPPoE, informasi ONT, dan riwayat pemakaian pelanggan.</p></div>
+      <form method="post" action="/admin/client-monitor/refresh"><button type="submit" class="btn btn-g btn-sm"><i class="bi bi-arrow-clockwise"></i> Ambil data sekarang</button></form>
+    </div>
+    <% if (msg) { %><div class="alert alert-<%= msg.type === 'success' ? 's' : 'd' %>"><%= msg.text %></div><% } %>
+    <div class="cm-overview" aria-label="Ringkasan pemantauan">
+      <div><span>Pelanggan PPPoE</span><strong><%= overview.total %></strong></div>
+      <div><span>Sesi terlihat</span><strong><%= overview.online %></strong></div>
+      <div><span>ONT teridentifikasi</span><strong><%= overview.withOnt %></strong></div>
+      <div><span>Unduhan tercatat · 30 hari</span><strong><%= bytes(overview.download30d) %></strong></div>
+    </div>
+    <div class="cm-layout">
+      <section class="cm-panel" aria-label="Daftar pelanggan">
+        <div class="cm-toolbar"><div><h2>Daftar pelanggan</h2><div class="cm-muted"><%= list.total %> akun dengan username PPPoE</div></div>
+          <form class="cm-search" method="get" action="/admin/client-monitor"><input type="search" name="search" value="<%= list.search %>" placeholder="Cari nama atau PPPoE" aria-label="Cari pelanggan"><button class="btn btn-g btn-sm" type="submit">Cari</button></form>
+        </div>
+        <% if (!list.rows.length) { %><div class="cm-empty">Belum ada pelanggan PPPoE yang cocok. Tambahkan username PPPoE pada daftar pelanggan untuk mulai memantau.</div><% } else { %>
+        <div class="cm-table-wrap"><table class="cm-table"><thead><tr><th>Pelanggan</th><th>ONT</th><th>Bandwidth</th><th>30 hari</th></tr></thead><tbody>
+        <% list.rows.forEach((row) => { %><tr class="<%= Number(selectedId) === row.id ? 'is-selected' : '' %>">
+          <td><a class="cm-name" href="<%= linkTo(row.id) %>"><%= row.name %></a><div class="cm-code"><%= row.pppoe_username %></div><span class="cm-status <%= row.online ? 'online' : '' %>"><%= row.online ? 'Online' : row.last_seen_at ? 'Tidak terlihat' : 'Belum terpantau' %></span></td>
+          <td><div class="cm-code"><%= row.ont_sn || 'SN belum terbaca' %></div><div class="cm-pair"><small>Redaman</small><span class="cm-num"><%= row.rx_power_dbm == null ? '—' : `${rate.format(row.rx_power_dbm)} dBm` %></span></div><div class="cm-pair"><small>Perangkat</small><span><%= row.connected_count == null ? '—' : row.connected_count %><%= row.connected_count != null && !ontFresh(row.ont_last_inform) ? ' · terakhir' : '' %></span></div></td>
+          <td><div class="cm-pair"><small>↓</small><span class="cm-num"><%= mbps(row.download_bps, row.online) %></span></div><div class="cm-pair"><small>↑</small><span class="cm-num"><%= mbps(row.upload_bps, row.online) %></span></div></td>
+          <td><div class="cm-pair"><small>↓</small><span class="cm-num"><%= bytes(row.download_30d) %></span></div><div class="cm-pair"><small>↑</small><span class="cm-num"><%= bytes(row.upload_30d) %></span></div></td>
+        </tr><% }); %></tbody></table></div>
+        <div class="cm-mobile-list"><% list.rows.forEach((row) => { %><div class="cm-mobile-card"><a class="cm-name" href="<%= linkTo(row.id) %>"><%= row.name %></a><div class="cm-code"><%= row.pppoe_username %> · <%= row.ont_sn || 'SN belum terbaca' %></div><span class="cm-status <%= row.online ? 'online' : '' %>"><%= row.online ? 'Online' : row.last_seen_at ? 'Tidak terlihat' : 'Belum terpantau' %></span><div class="cm-mobile-meta"><div><span>Redaman · Perangkat</span><strong><%= row.rx_power_dbm == null ? '—' : `${rate.format(row.rx_power_dbm)} dBm` %> · <%= row.connected_count == null ? '—' : row.connected_count %></strong></div><div><span>↓ / ↑ saat ini</span><strong><%= mbps(row.download_bps, row.online) %> / <%= mbps(row.upload_bps, row.online) %></strong></div><div><span>↓ / ↑ dalam 30 hari</span><strong><%= bytes(row.download_30d) %> / <%= bytes(row.upload_30d) %></strong></div></div></div><% }); %></div>
+        <div class="cm-pages"><span>Halaman <%= list.page %> dari <%= list.pages %></span><div><% if (list.page > 1) { %><a href="/admin/client-monitor?page=<%= list.page - 1 %>&search=<%= encodeURIComponent(list.search) %>">Sebelumnya</a><% } %> <% if (list.page < list.pages) { %><a href="/admin/client-monitor?page=<%= list.page + 1 %>&search=<%= encodeURIComponent(list.search) %>">Berikutnya</a><% } %></div></div>
+        <% } %>
+      </section>
+      <section class="cm-panel cm-detail" aria-label="Rincian pelanggan">
+        <% if (!detail) { %><div class="cm-empty">Pilih pelanggan untuk melihat pemakaian dan informasi ONT.</div><% } else { const c = detail.customer; const peak = Math.max(1, ...detail.daily.map(d => d.download + d.upload)); %>
+          <div class="cm-detail-top"><h2><%= c.name %></h2><div class="cm-code"><%= c.pppoe_username || 'Tanpa PPPoE' %><%= c.package_name ? ` · ${c.package_name}` : '' %></div><span class="cm-status <%= c.online ? 'online' : '' %>"><%= c.online ? 'Sesi terlihat' : c.last_seen_at ? 'Sesi tidak terlihat' : 'Belum terpantau' %></span><div class="cm-muted">Terakhir terlihat: <%= time(c.last_seen_at) %></div></div>
+          <dl class="cm-ident"><div><dt>SN ONT</dt><dd><%= c.ont_sn || 'Belum terbaca' %></dd></div><div><dt>Redaman</dt><dd><%= c.rx_power_dbm == null ? 'Belum terbaca' : `${rate.format(c.rx_power_dbm)} dBm` %></dd></div><div><dt>Perangkat terhubung</dt><dd><%= c.connected_count == null ? 'Belum terbaca' : c.connected_count %><%= c.connected_count != null && !ontFresh(c.ont_last_inform) ? ' (data terakhir)' : '' %></dd></div><div><dt>Bandwidth ↓ / ↑</dt><dd><%= mbps(c.download_bps, c.online) %> / <%= mbps(c.upload_bps, c.online) %></dd></div><% if (c.coordinates) { %><div><dt>Lokasi</dt><dd><a href="https://www.google.com/maps?q=<%= c.coordinates.lat %>,<%= c.coordinates.lng %>" target="_blank" rel="noopener noreferrer"><%= c.coordinates.lat %>, <%= c.coordinates.lng %> <i class="bi bi-box-arrow-up-right"></i></a></dd></div><% } %><div><dt>Data ONT terakhir</dt><dd><%= time(c.ont_last_inform || c.ont_synced_at) %></dd></div></dl>
+          <nav class="cm-periods" aria-label="Rentang pemakaian"><% [1,7,15,30].forEach((days) => { %><a href="<%= linkTo(c.id, days) %>" class="<%= detail.period === days ? 'active' : '' %>" <%= detail.period === days ? 'aria-current=page' : '' %>><%= days %> hari</a><% }); %></nav>
+          <div class="cm-usage"><div><span>Download tercatat</span><strong class="download"><%= bytes(detail.current.download) %></strong></div><div><span>Upload tercatat</span><strong class="upload"><%= bytes(detail.current.upload) %></strong></div></div>
+          <div class="cm-assessment <%= detail.assessment.tone %>"><strong><%= detail.assessment.label %></strong><p class="cm-muted">Dibandingkan rata-rata harian pada periode <%= detail.period %> hari sebelumnya. Data tersedia pada <%= detail.current.daysObserved %> dari <%= detail.period %> hari.</p></div>
+          <% if (detail.period > 1) { %><div class="cm-chart-title"><span>Pemakaian per hari</span><span class="cm-muted"><%= detail.daily[0].day %> – <%= detail.daily[detail.daily.length - 1].day %></span></div><div class="cm-chart" role="img" aria-label="Grafik pemakaian download dan upload per hari"><% detail.daily.forEach((day) => { const total = day.download + day.upload; const height = day.observed ? Math.max(2, total / peak * 100) : 0; const upHeight = total ? day.upload / total * height : 0; const downHeight = height - upHeight; %><div class="cm-bar" title="<%= day.day %>: download <%= bytes(day.download) %>, upload <%= bytes(day.upload) %><%= day.observed ? '' : ' (belum ada sampel)' %>"><div class="up" style="height:<%= upHeight %>%"></div><div class="down" style="height:<%= downHeight %>%"></div></div><% }); %></div><div class="cm-chart-legend"><span><i class="bi bi-square-fill dl"></i>Download</span><span><i class="bi bi-square-fill ul"></i>Upload</span></div><% } %>
+          <p class="cm-note">Rentang dihitung menurut hari kalender (<%= timezone %>). Counter MikroTik dibaca tiap <%= pollMinutes %> menit. Sampel pertama menjadi titik awal; trafik saat router tidak dapat dibaca tidak dapat diperkirakan. Riwayat yang sudah tercatat tetap tersimpan saat sesi atau ONT offline.</p>
+        <% } %>
+      </section>
+    </div>
+  </main>
+</div>
+</body>
+</html>

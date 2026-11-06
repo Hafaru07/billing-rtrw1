@@ -697,9 +697,10 @@ async function createPppoeSecret({ username, password, profile, remoteAddress, r
   }
 }
 
-async function getPppoeActive(routerId = null) {
+async function getPppoeActive(routerId = null, options = {}) {
+  const fresh = options.fresh === true;
   const ck = cacheKey(routerId, 'pppoeActive');
-  const cached = getCachedList(ck, 2000); // Very short cache (2s) for real-time active sessions
+  const cached = fresh ? null : getCachedList(ck, 2000); // Very short cache (2s) for real-time active sessions
   if (cached) return cached;
   let conn = null;
   try {
@@ -708,7 +709,7 @@ async function getPppoeActive(routerId = null) {
       conn.client.menu('/ppp/active').get(),
       10000,
       'getPppoeActive'
-    ).catch(() => []);
+    ).catch((error) => { if (fresh) throw error; return []; });
 
     if (Array.isArray(rows) && rows.length > 0) {
       try {
@@ -760,6 +761,7 @@ async function getPppoeActive(routerId = null) {
     return mapped;
   } catch (e) {
     logger.error('Error getting active PPPoE sessions:', e);
+    if (fresh) throw e;
     // Return cached data if available, even if expired
     const staleCache = listCache.get(ck);
     if (staleCache && staleCache.data) {

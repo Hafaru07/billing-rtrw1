@@ -62,6 +62,7 @@ const promoUpload = multer({
 });
 const backupSvc = require('../services/backupService');
 const monitoringSvc = require('../services/monitoringService');
+const clientMonitor = require('../services/clientMonitoringService');
 const inventorySvc = require('../services/inventoryService');
 const auditSvc = require('../services/auditTrailService');
 const whatsappService = require('../services/whatsappService');
@@ -1848,6 +1849,37 @@ router.get('/customers/:id/sticker-onu', requireAdminSession, async (req, res) =
 });
 
 // ─── CUSTOMERS ─────────────────────────────────────────────────────────────
+router.get('/client-monitor', requireAdminSession, requireSidebarMenuAccess('client_monitor'), (req, res) => {
+  try {
+    const list = clientMonitor.getList({ search: req.query.search, page: req.query.page });
+    const selectedId = Number(req.query.customer) || list.rows[0]?.id || null;
+    const detail = selectedId ? clientMonitor.getDetail(selectedId, req.query.days) : null;
+    res.render('admin/client_monitor', {
+      title: 'Pemantauan Client', company: company(), activePage: 'client_monitor',
+      list, detail, overview: clientMonitor.getOverview(), msg: flashMsg(req),
+      pollMinutes: Math.round(clientMonitor.POLL_MS / 60000), timezone: getSetting('timezone', 'Asia/Jakarta')
+    });
+  } catch (error) {
+    logger.error(`[Client Monitor] Halaman gagal dimuat: ${error.message}`);
+    res.status(500).send('Pemantauan client belum dapat dimuat.');
+  }
+});
+
+router.post('/client-monitor/refresh', requireAdminSession, requireSidebarMenuAccess('client_monitor'), async (req, res) => {
+  try {
+    const result = await clientMonitor.collectNow({ force: true });
+    req.session._msg = result.skipped
+      ? { type: 'success', text: 'Pembacaan baru saja dilakukan. Coba lagi sebentar.' }
+      : result.failedRouters
+        ? { type: 'error', text: `${result.recorded} sesi PPPoE terbaca; ${result.failedRouters} router gagal dihubungi. Riwayat tetap tersedia.` }
+        : { type: 'success', text: `Pemantauan diperbarui: ${result.recorded} sesi PPPoE terbaca.` };
+  } catch (error) {
+    logger.error(`[Client Monitor] Refresh gagal: ${error.message}`);
+    req.session._msg = { type: 'error', text: 'Gagal mengambil data dari perangkat. Riwayat tersimpan tetap tersedia.' };
+  }
+  res.redirect(303, '/admin/client-monitor');
+});
+
 router.get('/customers', requireAdminSession, requireSidebarMenuAccess('customers'), async (req, res) => {
   const { search = '', status: filterStatus = '', area: filterArea = '' } = req.query;
   const selectedRouterId = req.selectedRouterId || (req.query.router_id ? Number(req.query.router_id) : null);

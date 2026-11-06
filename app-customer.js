@@ -1981,6 +1981,7 @@ if (getSetting('telegram_enabled', false)) {
 // Mulai cron jobs (generate tagihan otomatis, dll)
 const { startCronJobs } = require('./services/cronService');
 startCronJobs();
+require('./services/clientMonitoringService').start();
 
 // Mulai auto backup
 scheduleAutoBackup();
